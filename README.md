@@ -1,6 +1,6 @@
 ### 230804 总述
 
-RL 估计器 主要参考22.Linear observer learning by temporal difference一文，把该文献中在线性系统上用 RL 学习协方差矩阵 P 的想法拓展到非线性系统。
+RL 估计器 主要参考22.Linear Observer Learning by Temporal Difference一文，把该文献中在线性系统上用 RL 学习协方差矩阵 P 的想法拓展到非线性系统。
 
 系统动态来自于22.Moving horizon estimation for nonlinear and non-Gaussian stochastic disturbances一文。
 $$
@@ -28,6 +28,8 @@ $$
 
 ### 20230804 系统动态
 
+dynamic.py
+
 step函数：{
 
 功能：系统动态方程，由当前时刻状态得到下一时刻状态
@@ -36,7 +38,7 @@ step函数：{
 
 输出：x_next—2维k+1时刻状态量，y—1维k+1时刻观测量
 
-备注：使用时需注意，相同的随机数种子会生成相同的噪声，因此在不同的时间步需要不同的随机数种子输入。并且在不同次的仿真过程中，随机数种子的顺序应该不同。由于需要保证可复现性，因此噪声序列对于指定的一次仿真过程应该是确定的，即指定仿真序号 i 后，噪声序列就确定了。那么在仿真执行过程中，从头到尾需要保存一个噪声序列。
+备注：使用时需注意，相同的随机数种子会生成相同的噪声，因此在不同的时间步需要不同的随机数种子输入。并且在不同次的仿真过程中，随机数种子的顺序应该不同。由于需要保证可复现性，因此初始状态和噪声序列对于指定的一次仿真过程应该是确定的，即指定仿真序号 i 后，初始状态和噪声序列就确定了。那么在仿真执行过程中，从头到尾需要保存一个噪声序列。
 
 }
 
@@ -49,5 +51,49 @@ gen_noise函数：{
 输出：disturb_list—扰动序列，noise_list—噪声序列
 
 备注：#为可选参数。目前扰动和噪声都是一维的，所以PQ都是浮点数，而不是协方差矩阵，后续如果有需要再做修改。
+
+}
+
+
+
+### 20230805 EKF和simulation
+
+estimator.py
+
+EKF函数：{
+
+功能：EKF做单步估计
+
+输入：state—当前状态（的估计），Cov—当前状态的协方差矩阵（的估计），obs_next—下一时刻的观测
+
+输出：state_hat—下一时刻状态的估计，Cov_hat—下一时刻状态的协方差矩阵的估计
+
+备注：预测和更新都是直接照搬的12.A Fresh Look at the Kalman Filter P12最下方的公式。做出来的效果与22.Moving horizon estimator for nonlinear and non-Gaussian stochastic disturbances中P243 case Ia接近，初步认为写的EKF没什么大问题。
+
+}
+
+inv函数：{
+
+功能：矩阵求逆
+
+输入：M—矩阵（方阵）
+
+输出：M矩阵的逆
+
+备注：由于numpy提供的矩阵求逆的方法不能对1维矩阵求逆，并且有两个前缀写起来不方便，因此简单整合了一下。
+
+}
+
+RL_estimator.py
+
+simulate函数：{
+
+功能：进行一次状态估计的仿真过程
+
+输入：sim_num—仿真序号（对应该次仿真的随机数种子），#x0_mu—初始状态分布的均值，#P0—初始状态分布的协方差矩阵，STATUS—表明该次仿真是用于测试（test）还是用于RL训练
+
+输出：none
+
+备注：当STATUS=='test'时，会绘制状态估计的图以及误差的图。
 
 }

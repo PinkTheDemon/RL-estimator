@@ -3,7 +3,7 @@ import numpy as np
 # system dynamics
 def step(x, disturb, noise) : 
     # nolinear dynamics
-    x_next = list.copy(x)
+    x_next = np.copy(x)
     x_next[0] = 0.99*x[0] + 0.2*x[1] 
     x_next[1] = -0.1*x[0] + 0.5*x[1]/(1+x[1]**2) + disturb 
     y = x_next[0] - 3*x_next[1] + noise 
