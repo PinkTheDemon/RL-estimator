@@ -37,7 +37,7 @@ def EKF (state, P, obs_next, Q, R) :
 def NLSF(state_mu, P, obs_next, Q, R) : 
     state_next_mu = dyn.f(state_mu)
     x0 = np.hstack((state_mu, state_next_mu))
-    result = least_squares(residual_fun, x0, jac_fun, args=(state_mu, P, obs_next, Q, R))
+    result = least_squares(residual_fun, x0, jac_fun, method='lm', max_nfev=500, args=(state_mu, P, obs_next, Q, R))
     return result.x
 
 # residual function in NLSF

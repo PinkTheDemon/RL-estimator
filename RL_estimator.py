@@ -280,7 +280,7 @@ def main() :
 
     # train(args, agent)
 
-    simulate(args, sim_num=10086, STATUS='EKF')
+    simulate(args, sim_num=10086, STATUS='NLS-EKF')
 
 if __name__ == '__main__' : 
     main()
