@@ -6,97 +6,61 @@ import torch
 from collections import defaultdict, deque
 import matplotlib.pyplot as plt
 import argparse
+import os
+import sys
 
 import dynamics as dyn
 import estimator as est
 
 
 class Actor(nn.Module) : 
-    def __init__(self, state_dim, action_dim, h1=400, h2=300) -> None : 
+    def __init__(self, state_dim, obs_dim, h1=400, h2=300) -> None : 
         """
         param:action_lim: used to limit action space in [-action_lim, action_lim]
         """
         super(Actor, self).__init__()
 
-        self.state_dim = state_dim
-        self.action_dim = action_dim
+        self.input_dim = state_dim + obs_dim
+        self.output_dim = int(state_dim*(state_dim+1)/2 + 1)
 
-        self.fc1 = nn.Linear(state_dim, h1)
+        self.fc1 = nn.Linear(self.input_dim, h1)
         self.fc2 = nn.Linear(h1, h2)
-        self.fc3 = nn.Linear(h2, action_dim)
+        self.fc3 = nn.Linear(h2, self.output_dim)
 
-    def forward(self, state) : 
-        x = F.relu(self.fc1(state))
-        x = F.relu(self.fc2(x))
-        action = self.fc3(x)
+    def forward(self, state_hat, obs_next) : 
+        input = np.hstack((state_hat, obs_next))
+        input = torch.tensor(input, dtype=torch.float32)
+        f1 = F.relu(self.fc1(input))
+        f2 = F.relu(self.fc2(f1))
+        action = self.fc3(f2)
         return action
     
-class Critic(nn.Module) : ## critic 可能不是一个神经网络，而是基于状态和动作的一个确定性网络
-    def __init__(self, state_dim, action_dim, h1=200, h2=300) -> None:
-        super(Critic).__init__()
-
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-
-        self.fc1 = nn.Linear(state_dim, h1)
-        self.fc2 = nn.Linear(action_dim, h1)
-        self.fc3 = nn.Linear(h1+h1, h2)
-        self.fc4 = nn.Linear(h2, 1)
-
-    def forward(self, state, action) : 
-        x = F.relu(self.fc1(state))
-        y = F.relu(self.fc2(action))
-        h = torch.cat((x,y), dim=1)
-        h = F.relu(self.fc3(h))
-        Q = self.fc4(h)
-
-class ReplayBuffer(object) : 
-    def __init__(self, buffer_size, rand_num=111) -> None:
-        self.buffer_size = buffer_size
-        self.count = 0
-        self.buffer = []
-        np.random.seed(rand_num)
-        ## 在init中设定seed，后续方法中采样也是按照这个seed来吗？
-
-    def add(self, s, a, r, d, s2) : 
-        experience = (s, a, r, d, s2)
-        if self.count < self.buffer_size : 
-            self.buffer.append(experience)
-            self.count += 1
-        else : # buffer 已满，非优先采样，旧样本出新样本进
-            self.buffer.pop(0)
-            self.buffer.append(experience)
-
-    def size(self) : 
-        return self.count
-    
-    def sample_batch(self, batch_size) : 
-        if self.count < batch_size : # 按理来说不会出现count > batch_size的情况，可能这样代码鲁棒性更强
-            batch = np.random.choice(self.buffer, self.count, replace=False)
-        else : 
-            batch = np.random.choice(self.buffer, batch_size, replace=False)
-
-        bs  = np.array([_[0] for _ in batch])
-        ba  = np.array([_[1] for _ in batch])
-        br  = np.array([_[2] for _ in batch])
-        bd  = np.array([_[3] for _ in batch])
-        bns = np.array([_[4] for _ in batch])
-
-        bs  = torch.tensor(bs, dtype=torch.float32)
-        ba  = torch.tensor(ba, dtype=torch.float32)
-        br  = torch.tensor(br, dtype=torch.float32)
-        bd  = torch.tensor(bd, dtype=torch.float32)
-        bns = torch.tensor(bns, dtype=torch.float32)
-        return bs, ba, br, bd, bns
+    def update_weight(self, state_hat, obs_next, P_new, h_new) : 
+        action = self.forward(state_hat, obs_next)
+        try : 
+            L_new = np.linalg.cholesky(P_new)
+        except np.linalg.LinAlgError : 
+            return
+        action_new = L_new.reshape(L_new.size)
+        action_new = action_new[action_new != 0]
+        action_new = np.append(action_new, h_new)
+        action_new = torch.tensor(action_new, dtype=torch.float32)
+        
+        loss = F.mse_loss(action, action_new)
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-2)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
 class OUnoise : ## DDPG算法中常用OUnoise，而不是Gaussian noise，在这个问题中是否有影响？
-    def __init__(self, action_dim, theta=0.15, mu=0, sigma=0.2, dt=1e-2, x0=None) -> None:
-        self.action_dim = action_dim
+    def __init__(self, state_dim, theta=0.15, mu=None, sigma=0.2, dt=1e-2, x0=None, rand_num=111) -> None:
+        self.output_dim = int(state_dim*(state_dim+1)/2 + 1)
         self.theta = theta
-        self.mu = mu
+        self.mu = mu if mu is not None else np.zeros(self.output_dim)
         self.sigma = sigma
         self.dt = dt
         self.x0 = x0
+        np.random.seed(rand_num)
         self.reset()
 
     def reset(self) : 
@@ -108,96 +72,115 @@ class OUnoise : ## DDPG算法中常用OUnoise，而不是Gaussian noise，在这
         self.x_prev = x
         return x
 
-class DDPG : 
-    def __init__(self, state_dim, action_dim, gamma) -> None:
-        self.policy = Actor(state_dim, action_dim)
-        self.value = Critic(state_dim, action_dim)
-        self.target_policy = Actor(state_dim, action_dim)
-        self.target_value = Critic(state_dim, action_dim)
-        self.target_policy.load_statr_dict(self.policy.state_dict())
-        self.target_value.load_state_dict(self.value.state_dict())
-        self.gamma = gamma
+class RL_estimator : 
+    def __init__(self, state_dim, obs_dim, noise:OUnoise, rand_num=111, STATUS='train') -> None:
+        self.state_dim = state_dim
+        torch.manual_seed(rand_num)
+        self.policy = Actor(state_dim, obs_dim)
+        self.OUnoise = noise
+        self.STATUS = STATUS
 
-    def get_action(self, state) : 
-        action = self.policy(state)
-        return action 
+    def value(self, state, state_hat, Pinv, h) : 
+        Q = (state - state_hat) @ Pinv @ (state - state_hat).T + h
+        return Q
+
+    def get_Pinv(self, state_hat, obs_next) : 
+        noise = self.OUnoise.noise()
+        noise = (self.STATUS=='train')*noise
+        action = self.policy(state_hat, obs_next).detach().numpy() + noise
+        L = np.zeros((self.state_dim, self.state_dim))
+        for i in range(self.state_dim) : 
+            L[i][ :i+1] = np.copy(action[ :i+1])
+            action = action[i+1: ]
+        Pinv = L @ L.T
+        h = action[-1]
+
+        return Pinv, h
     
-    def compute_policy_loss(self, bs, ba, br, bd, bns) : 
-        predicted_action = self.get_action(bs)
-        loss = -self.value(bs, predicted_action).mean()
-        return loss
+    def reset_noise(self, noise:OUnoise) : 
+        self.noise = noise
+
+def train(args, agent:RL_estimator) : 
+    sys.stdout = open(args.output_file, 'w')
+
+    MSE_min = np.zeros((2))
+    for i in range(args.max_episodes) : 
+        noise = OUnoise(args.state_dim, rand_num=i)
+        agent.reset_noise(noise)
+
+        x, w_list, v_list = dyn.reset(sim_num=i, maxstep=args.max_steps, x0_mu=args.x0_mu, P0=args.P0, disturb_Q=args.Q, noise_R=args.R)
+        x_hat = args.x0_mu
+        P_inv = est.inv(args.P0)
+        x_EKF = args.x0_mu
+        P_EKF = args.P0
+        h = 0
+        MSE = np.zeros((args.max_episodes, 2))
+        for t in range(args.max_steps) : 
+            # dynamic, x is unobservable, y is observable
+            x_next, y_next = dyn.step(x, w_list[t], v_list[t])
+
+            # EKF for comparison
+            x_next_EKF, P_next_EKF = est.EKF(x_EKF, P_EKF, y_next, args.Q, args.R)
+            x_EKF = x_next_EKF
+            P_EKF = P_next_EKF
+
+            # get covarience matrix P 
+            P_inv_next, h_next = agent.get_Pinv(x_hat, y_next) 
+
+            # solve optimization problem, get x_next_hat
+            result = est.NLSF(x_hat, est.inv(P_inv), y_next, args.Q, args.R)
+            x_correct = result[ :2]
+            x_next_hat = result[2: ]
+
+            if t > 0 : 
+                target_Q = args.gamma * agent.value(x_last_correct, x_last_hat, P_inv_last, h_last) + \
+                        (x_correct - dyn.f(x_last_correct))@est.inv(args.Q)@(x_correct - dyn.f(x_last_correct)).T + \
+                        (y - dyn.h(x_correct))@est.inv(args.R)@(y - dyn.h(x_correct)).T
+                Q = agent.value(x_correct, x_hat, P_inv, h)
+                delta = Q - target_Q
+                P_inv_new = P_inv - args.lr_value * delta * ((x_correct - x_hat)@(x_correct - x_hat).T) # 梯度下降不能保证正定
+                h_new = h - args.lr_value * delta
+                agent.policy.update_weight(x_last_hat, y, P_inv_new, h_new)
+
+            # error evaluate, MSE
+            MSE[i] += (x_next - x_next_hat)**2 / args.max_steps
+
+            x_last_correct = x_correct
+            x_last_hat = x_hat
+            x_hat = x_next_hat
+            x = x_next
+            y = y_next
+            P_inv_last = P_inv
+            P_inv = P_inv_next
+            h_last = h
+            h = h_next
+        print(i, ': MSE = ', MSE[i], '\n')
+        sys.stdout.flush()
+        if (MSE[i] <= MSE_min).all() or i == 0 : 
+            MSE_min = MSE[i]
+            save_path = os.path.join(args.output_dir, "model.bin")
+            torch.save(agent.policy.state_dict(), save_path)
     
-    def compute_value_loss(self, bs, ba, br, bd, bns) : 
-        with torch.no_grad() : 
-            predicted_bna = self.target_policy(bns)
-            target_value = self.gamma * self.target_value(bns, predicted_bna).squeeze * (1-bd) + br
-
-        value = self.value(bs, ba).squeeze()
-        loss = F.mse_loss(value, target_value)
-        return loss
-    
-    def soft_update(self, tau=0.01) : 
-        for target_param, param in zip(self.target_value.parameters(), self.value.parameters()) : 
-            target_param.data.copy_(target_param.data*(1-tau) + param.data*tau)
-
-        for target_param, param in zip(self.target_policy.parameters(), self.policy.parameters()) : 
-            target_param.data.copy_(target_param.data*(1-tau) + param.data*tau)
-
-def train(args, env, agent:DDPG, noise:OUnoise) : 
-    policy_optimizer = Adam(agent.policy.parameters(), lr = args.lr_policy)
-    value_optimizer  = Adam(agent.value.parameters(),  lr = args.lr_value)
-
-    replay_buffer = ReplayBuffer(buffer_size=args.buffer_size)
-
-    log = defaultdict(list)
-
-    episode_reward = 0
-    episode_length = 0
-    max_episode_reward = -float('inf')
-    value_loss_list = [0]
-    policy_loss_list = [0]
-
-    x_seq = np.zeros((args.max_steps,2))
-    x_hat_seq = np.zeros((args.max_steps,2))
-    y_seq = np.zeros((args.max_steps,1))
-    error = np.zeros((args.max_steps,2))
-    x, w_list, v_list = dyn.reset()
-    x_hat = np.random.multivariate_normal(args.x0_mu, args.P0)
-    for t in range(args.max_steps) : 
-        # dynamic, x is unobservable, y is observable
-        x_next, y_next = dyn.step(x, w_list[t], v_list[t])
-
-        # get state = [x_hat, y_next]
-        state = np.concatenate((x_hat, [y_next]))
-
-        # get action with noise
-        action = agent.get_action(torch.tensor(state))
-        action = action + noise.noise()
-
-        # get covarience matrix P ## 还有一个常数项 h，常数项不影响优化问题，应该可以不要
-        # action to P directly
-        P = action.reshape((x.size(), x.size()))
-        # # action to L, then P = L.T @ L
-        # for i in range(x.size()) : 
-        #     L = 
-
-        # solve optimization problem, get x_hat_next
-
-        
+    sys.stdout.close()
+    sys.stdout = sys.__stdout__
 
 
-
-
-
-def simulate(args, sim_num, STATUS='test') : ## 后续可以也改成用args传参数
+def simulate(args, sim_num, STATUS='EKF') : ## 后续可以也改成用args传参数
     # set random seed
     np.random.seed(sim_num)
     # generate disturbance and noise
-    x0, w_list, v_list = dyn.reset(sim_num, args.max_steps, x0_mu=args.x0_mu, P0=args.P0)
+    x0, w_list, v_list = dyn.reset(sim_num, args.max_steps, x0_mu=args.x0_mu, P0=args.P0, disturb_Q=args.Q, noise_R=args.R)
+
+    if STATUS == 'NLS-RLF' : 
+        noise = OUnoise(state_dim=args.state_dim, rand_num=sim_num)
+        agent = RL_estimator(args.state_dim, args.obs_dim, noise, STATUS='test')
+        model_path = os.path.join(args.output_dir, "model.bin")
+        agent.policy.load_state_dict(torch.load(model_path))
 
     x_seq = np.zeros((args.max_steps,2))
     x_hat_seq = np.zeros((args.max_steps,2))
     y_seq = np.zeros((args.max_steps,1))
+    P_seq = [np.zeros((2,2)) for _ in range(args.max_steps)]
     error = np.zeros((args.max_steps,2))
     x = x0
     x_hat = args.x0_mu
@@ -208,38 +191,40 @@ def simulate(args, sim_num, STATUS='test') : ## 后续可以也改成用args传�
     for t in t_seq : 
         # real state
         x_next,y_next = dyn.step(x,w_list[t,:],v_list[t])
-        x_seq[t] = x 
-        y_seq[t] = y_next
 
-        # # estimator EKF
-        # x_next_hat, P_next_hat = est.EKF(x_hat, P_hat, y_next)
-        # estimator NLS-EKF
-        result = est.NLSF(x_hat, P_hat, y_next)
-        x_hat = result[:2]
-        x_next_hat = result[2:]
-        _, P_next_hat = est.EKF(x_hat, P_hat, y_next)
+        if STATUS == 'EKF' or STATUS=='init': 
+            # estimator Extended Kalman Filter
+            x_next_hat, P_next_hat = est.EKF(x_hat, P_hat, y_next, args.Q, args.R)
+        elif STATUS == 'NLS-EKF' : 
+            # estimator Nonlinear Least Square-Extended Kalman Filter
+            result = est.NLSF(x_hat, P_hat, y_next, args.Q, args.R)
+            x_hat = result[ :2]
+            x_next_hat = result[2: ]
+            _, P_next_hat = est.EKF(x_hat, P_hat, y_next, args.Q, args.R)
+        elif STATUS == 'NLS-RLF' : 
+            # estimator Nonlinear Least Square-Reinforcement Learning Filter
+            P_inv_next, _ = agent.get_Pinv(x_hat, y_next)
+            P_next_hat = est.inv(P_inv_next)
+            result = est.NLSF(x_hat, P_hat, y_next, args.Q, args.R)
+            x_hat = result[ :2]
+            x_next_hat = result[2: ]
+
 
         # error evaluate, MSE
-        # MSE += (x - x_hat)**2 / args.max_steps
         MSE += (x_next - x_next_hat)**2 / args.max_steps
 
         # move forward
         x_seq[t] = x_next 
         y_seq[t] = y_next
         x_hat_seq[t] = x_next_hat
-        error[t] = x - x_hat
+        P_seq[t] = P_next_hat
+        error[t] = x_next - x_next_hat
         t += 1
         x = x_next
         x_hat = x_next_hat
         P_hat = P_next_hat
-
-    # # save data to a file for error analysis
-    # a = np.hstack((x_seq, x_hat_seq, np.insert(y_seq,0,0)[:-1].reshape((200,1))))
-    # np.set_printoptions(suppress=True)
-    # with open('data.txt', 'w') as file : 
-    #     file.write(np.array2string(a, separator=','))
     
-    if STATUS == 'test' : 
+    if STATUS != 'init' : 
         # plot
         fig, axs = plt.subplots(2,1)
         axs[0].plot(t_seq, x_seq[:,0], label='x_real', color='tab:blue')
@@ -263,14 +248,39 @@ def simulate(args, sim_num, STATUS='test') : ## 后续可以也改成用args传�
         ax.legend()
         plt.show()
 
+    return x_hat_seq, y_seq, P_seq
 
-
-if __name__ == '__main__' : 
+def main() : 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--max_episodes", default=500, type=int, help="max train episodes")
     parser.add_argument("--max_steps", default=200, type=int, help="max simulation steps")
+    parser.add_argument("--state_dim", default=2, type=int, help="dimension of state variable x")
+    parser.add_argument("--obs_dim", default=1, type=int, help="dimension of measurement y")
     parser.add_argument("--x0_mu", default=np.array([0,0]), help="average of initial state distribution")
     parser.add_argument("--P0", default=np.array([[1,0],[0,1]]), help="Covariance of initial state distribution")
+    parser.add_argument("--Q", default=np.array([[0.0001,0],[0,1]]), help="Covariance of process disturbance")
+    parser.add_argument("--R", default=np.array([[0.01]]), help="Covariance of measurement noise")
+    parser.add_argument("--gamma", default=1.0, type=float, help="discount factor in value function")
+    parser.add_argument("--lr_value", default=1e-3, type=float, help="learning rate of value function")
+    parser.add_argument("--lr_policy", default=1e-2, type=float, help="learning rate of policy net")
+    parser.add_argument("--output_dir", default="output", type=str, help="path for files to save outputs such as model")
+    parser.add_argument("--output_file", default="output/log.txt", type=str, help="file to save training messages")
 
     args = parser.parse_args()
 
-    simulate(args, sim_num=1)
+    # noise = OUnoise(args.state_dim)
+    # agent = RL_estimator(state_dim=args.state_dim, obs_dim=args.obs_dim, noise=noise, STATUS='test')
+    # # init policy network
+    # x_hat_seq, y_next_seq, P_next_seq = simulate(args, sim_num=22222, STATUS='init')
+    # x_hat_seq = np.insert(x_hat_seq, 0, args.x0_mu, axis=0)
+    # for t in range(args.max_steps) : 
+    #     agent.policy.update_weight(x_hat_seq[t], y_next_seq[t], P_next_seq[t], 0)
+    # # save_path = os.path.join(args.output_dir, "model.bin")
+    # # torch.save(agent.policy.state_dict(), save_path)
+
+    # train(args, agent)
+
+    simulate(args, sim_num=10086, STATUS='EKF')
+
+if __name__ == '__main__' : 
+    main()

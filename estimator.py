@@ -18,7 +18,7 @@ def block_diag(matrix_list) :
     return bd_M
 
 # Extended Kalman Filter
-def EKF (state, P, obs_next, Q=np.array([[0.0001,0],[0,1]]), R=np.array([[1]])) : 
+def EKF (state, P, obs_next, Q, R) : 
     # linearization system matrix
     F = np.array([[0.99,0.2],[-0.1,0.5*(1-state[1]**2)/(1+state[1]**2)**2]])
     H = np.array([[1,-3]])
@@ -34,18 +34,18 @@ def EKF (state, P, obs_next, Q=np.array([[0.0001,0],[0,1]]), R=np.array([[1]])) 
     return state_hat, P_hat
 
 # solve one-step optimization problem to get state estimation, nonlinear least square filter
-def NLSF(state_mu, P, obs_next, Q=np.array([[0.0001,0],[0,1]]), R=np.array([[1]])) : 
-    state_next_mu, _ = dyn.step(state_mu)
+def NLSF(state_mu, P, obs_next, Q, R) : 
+    state_next_mu = dyn.f(state_mu)
     x0 = np.hstack((state_mu, state_next_mu))
-    result = least_squares(residual_fun, x0, jac_fun, method='lm', args=(state_mu, P, obs_next, Q, R))
+    result = least_squares(residual_fun, x0, jac_fun, args=(state_mu, P, obs_next, Q, R))
     return result.x
 
 # residual function in NLSF
 def residual_fun(x, state_mu, P, obs_next, Q, R) : 
     x_hat = x[:2]
     x_next_hat = x[2:]
-    fx, _ = dyn.step(x_hat)
-    hx_next = x_next_hat[0] - 3*x_next_hat[1] ## 由于系统动态函数中动态方程和观测方程不是分开写的，所以这里只能单独把观测方程搬过来
+    fx = dyn.f(x_hat)
+    hx_next = dyn.h(x_next_hat)
 
     L = block_diag([inv(P), inv(Q), inv(R)])
     L = np.linalg.cholesky(L)

@@ -1,23 +1,32 @@
 import numpy as np
 
-# system dynamics
-def step(x, disturb=[0,0], noise=0) : 
-    # nolinear dynamics
+def f(x, disturb=[0,0]) : 
+    # nolinear dynamics equation
     x_next = np.copy(x)
     x_next[0] = 0.99*x[0] + 0.2*x[1] + disturb[0]
     x_next[1] = -0.1*x[0] + 0.5*x[1]/(1+x[1]**2) + disturb[1] 
-    y_next = x_next[0] - 3*x_next[1] + noise 
+    return x_next
+
+def h(x, noise=0) : 
+    # measurement equation 
+    y = x[0] - 3*x[1] + noise
+    return np.array([y])
+
+# system dynamics
+def step(x, disturb=[0,0], noise=0.0) : 
+    x_next = f(x, disturb)
+    y_next = h(x_next, noise)
 
     return x_next, y_next
 
 # generate noise list for ith simulation
-def reset(sim_num, maxstep, x0_mu=[0,0], P0=[[1,0],[0,1]],
-          disturb_mu=[0,0], disturb_Q=[[0.0001,0],[0,1]], noise_mu=0.0, noise_R=0.01) : 
+def reset(sim_num, maxstep, x0_mu, P0, disturb_Q, noise_R, 
+          disturb_mu=[0,0], noise_mu=0.0) : 
     np.random.seed(sim_num)
     
     initial_state = np.random.multivariate_normal(x0_mu, P0)
     disturb_list  = np.random.multivariate_normal(disturb_mu, disturb_Q, maxstep)
-    noise_list    = np.random.normal(noise_mu, noise_R, maxstep)
+    noise_list    = np.random.normal(noise_mu, noise_R.item(), maxstep)
 
     return initial_state, disturb_list, noise_list
 
