@@ -3,18 +3,16 @@ from torch import nn
 from torch.optim import Adam
 import torch.nn.functional as F
 import torch
-from collections import defaultdict, deque
 import matplotlib.pyplot as plt
 import argparse
 import os
 import sys
-from dataclasses import dataclass, field
 
 import dynamics as dyn
 import estimator_copy as est
 
 
-class OUnoise : ## DDPG算法中常用OUnoise，而不是Gaussian noise，在这个问题中是否有影响？
+class OUnoise : # DDPG算法中常用OUnoise，而不是Gaussian noise，在这个问题中是否有影响？——在目前的算法中，并不需要用到OUnoise，反而高斯噪声更合适
     def __init__(self, state_dim, theta=0.15, mu=None, sigma=0.2, dt=1e-2, x0=None, rand_num=111) -> None:
         self.output_dim = int(state_dim*(state_dim+1)/2 + 1)
         self.theta = theta
@@ -36,10 +34,7 @@ class OUnoise : ## DDPG算法中常用OUnoise，而不是Gaussian noise，在这
 
 
 class Actor(nn.Module) : 
-    def __init__(self, state_dim, obs_dim, h1=400, h2=300) -> None : 
-        """
-        param:action_lim: used to limit action space in [-action_lim, action_lim]
-        """
+    def __init__(self, state_dim, obs_dim, h1=300, h2=300, h3=300, h4=300) -> None : 
         super(Actor, self).__init__()
 
         self.input_dim = state_dim + obs_dim
@@ -47,35 +42,26 @@ class Actor(nn.Module) :
 
         self.fc1 = nn.Linear(self.input_dim, h1)
         self.fc2 = nn.Linear(h1, h2)
-        self.fc3 = nn.Linear(h2, self.output_dim)
+        self.fc3 = nn.Linear(h2, h3)
+        self.fc4 = nn.Linear(h3, h4)
+        self.fc5 = nn.Linear(h4, self.output_dim)
 
-    def forward(self, state_pre, obs) : 
-        input = np.hstack((state_pre, obs))
+    def forward(self, input) : 
         input = torch.tensor(input, dtype=torch.float32)
         f1 = F.relu(self.fc1(input))
         f2 = F.relu(self.fc2(f1))
-        action = self.fc3(f2)
+        f3 = F.relu(self.fc3(f2))
+        f4 = F.relu(self.fc4(f3))
+        action = self.fc5(f4)
         return action
 
-    def update_weight(self, bsp, bo, bPni, bh) : 
-        for state_pre, obs, P_next_inv, h_next in zip(bsp, bo, bPni, bh) : 
-            action = self.forward(state_pre, obs)
-            try : 
-                L_new = np.linalg.cholesky(P_next_inv)
-            except np.linalg.LinAlgError : 
-                print('update error')
-                return
-            action_new = L_new.reshape(L_new.size)
-            action_new = action_new[action_new != 0]
-            action_new = np.append(action_new, h_next)
-            action_new = torch.tensor(action_new, dtype=torch.float32)
-
-            loss = F.mse_loss(action, action_new)
-            optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
+    def update_weight(self, bin, bot, lr=1e-3) : 
+        output_batch = self.forward(bin)
+        loss = F.mse_loss(output_batch, bot)
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
 class ReplayBuffer : 
     def __init__(self, maxsize:int) -> None:
@@ -83,57 +69,62 @@ class ReplayBuffer :
         self.size = 0
         self.size_init = 0
         self.count = 0
-        self.state_pre = list()
-        self.obs = list()
-        self.Pinv = list()
-        self.h = list()
-        self.state_pre_init = list()
-        self.obs_init = list()
-        self.P_next_inv_init = list()
-        self.h_next_init = list()
+        self.input = list()
+        self.output = list()
+        self.input_init = list()
+        self.output_init = list()
 
-    def push_init(self, state_pre, obs, Pinv_next, h_next) : 
-        self.state_pre_init.append(state_pre)
-        self.obs_init.append(obs)
-        self.P_next_inv_init.append(Pinv_next)
-        self.h_next_init.append(h_next)
+    def push_init(self, state_pre, obs, Pinv_next, h_next) : # 初始样本人为确保正确性，就不判断正定了
+        input = np.hstack((state_pre, obs))
+        output = self.P2o(Pinv_next, h_next)
+        self.input_init.append(input)
+        self.output_init.append(output)
         self.size_init += 1
 
     def push(self, state_pre, obs, Pinv_next, h_next) : 
+        input = np.hstack((state_pre, obs))
+        output = self.P2o(Pinv_next, h_next)
+        if len(output) == 0 : # Pinv_next非正定
+            return
+
         if self.size < self.maxsize : 
-            self.state_pre.append(state_pre)
-            self.obs.append(obs)
-            self.Pinv.append(Pinv_next)
-            self.h.append(h_next)
+            self.input.append(input)
+            self.output.append(output)
             self.size += 1
         else : 
-            self.state_pre[self.count] = state_pre
-            self.obs[self.count] = obs
-            self.Pinv[self.count] = Pinv_next
-            self.h[self.count] = h_next
-        self.count += 1
-        self.count = self.count % self.maxsize
+            self.input[self.count] = input
+            self.output[self.count] = output
+            self.count += 1
+            self.count = int(self.count % self.maxsize)
 
-    def sample(self, n) : 
+    def sample(self, n:int) : 
         indices = np.random.randint(self.size+self.size_init, size=n)
-        bsp = []
-        bo  = []
-        bPi = []
-        bh  = []
+        bin = []
+        bot = []
         for i in indices : 
             if i < self.size : 
-                bsp.append(self.state_pre[i])
-                bo.append(self.obs[i])
-                bPi.append(self.Pinv[i])
-                bh.append(self.h[i])
+                bin.append(self.input[i])
+                bot.append(self.output[i])
             else : 
-                bsp.append(self.state_pre_init[i-self.size])
-                bo.append(self.obs_init[i-self.size])
-                bPi.append(self.P_next_inv_init[i-self.size])
-                bh.append(self.h_next_init[i-self.size])                
+                bin.append(self.input_init[i-self.size])
+                bot.append(self.output_init[i-self.size])
+        bin = torch.FloatTensor(bin)
+        bot = torch.FloatTensor(bot)
 
-        return bsp, bo, bPi, bh
+        return bin, bot
+    
+    def P2o(self, P, h) : 
+        # check if Pinv_next is semi-definit
+        try : 
+            L = np.linalg.cholesky(P)
+        except np.linalg.LinAlgError : # 矩阵非正定
+            print('new P matrix is not positive definite')
+            return []
 
+        out = L.reshape(L.size)
+        out = out[out != 0]
+        out = np.append(out, h)
+        return out
 
 class RL_estimator : 
     def __init__(self, state_dim, obs_dim, noise:OUnoise, rand_num=111, STATUS='train') -> None:
@@ -143,20 +134,21 @@ class RL_estimator :
         self.OUnoise = noise
         self.STATUS = STATUS
 
-    def value(self, state, state_hat, Pinv, h) : 
-        Q = (state - state_hat) @ Pinv @ (state - state_hat).T + h
+    def value(self, state, state_pre, Pinv, h) : 
+        Q = (state - state_pre) @ Pinv @ (state - state_pre).T + h
         return Q
 
     def get_Pinv(self, state_pre, obs) : 
         noise = self.OUnoise.noise()
         noise = (self.STATUS=='train')*noise
-        action = self.policy(state_pre, obs).detach().numpy() + noise
+        input = np.hstack((state_pre, obs))
+        output = self.policy(input).detach().numpy() + noise
         L = np.zeros((self.state_dim, self.state_dim))
         for i in range(self.state_dim) : 
-            L[i][ :i+1] = np.copy(action[ :i+1])
-            action = action[i+1: ]
+            L[i][ :i+1] = np.copy(output[ :i+1])
+            output = output[i+1: ]
         P_next_inv = L @ L.T
-        h_next = action[-1]
+        h_next = output[-1]
 
         return P_next_inv, h_next
 
@@ -169,12 +161,12 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
 
     MSE_min = np.zeros((2))
     for i in range(args.max_episodes) : 
-        noise = OUnoise(args.state_dim, rand_num=i)
-        agent.reset_noise(noise)
+        # noise = OUnoise(args.state_dim, rand_num=i)
+        # agent.reset_noise(noise) ## 是否需要每次都基于当前最好的模型来训练，但是当前最好的模型也有可能只是在当前这一集上表现好。评价好坏可能需要与EKF的MSE作对比。
 
         x, w_list, v_list = dyn.reset(sim_num=i, maxstep=args.max_steps, x0_mu=args.x0_mu, P0=args.P0, disturb_Q=args.Q, noise_R=args.R)
         np.random.seed(i)
-        v0 = np.random.normal(0, args.R).item() ## 看一下i变化之后生成的随机噪声有没有变——没有
+        v0 = np.random.normal(0, args.R).item() # 看一下i变化之后生成的随机噪声有没有变——没有——修改随机数种子后解决
         y = dyn.h(x, v0)
         x_pre = args.x0_mu
         P_pre_inv = est.inv(args.P0)
@@ -186,11 +178,6 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
             # dynamic, x is unobservable, y is observable
             x_next, y_next = dyn.step(x, w_list[t], v_list[t])
 
-            # # EKF for comparison
-            # x_next_EKF, P_next_EKF = est.EKF(x_EKF, P_EKF, y_next, args.Q, args.R)
-            # x_EKF = x_next_EKF
-            # P_EKF = P_next_EKF
-
             # get covarience matrix P 
             P_next_pre_inv, h_next = agent.get_Pinv(x_pre, y)
 
@@ -201,19 +188,19 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
             x_next_pre = result[2: ]
 
             # training
-            # if t > 0 : ## 论文中的决策变量是在xhat邻域内随机选择的，然后通过优化问题求出另一个决策变量，这样好像能够保证梯度不会差太多
-            x_next_noise = x_next_pre + np.random.multivariate_normal(np.zeros((args.state_dim, )), args.explore_Cov) ## 不同的t会得到相同的采样值吗？
+            # if t > 0 : ## 可能随机探索要放到回放训练里面做，而不是在存储样本之前做。文献中这样写是因为它是一个episode只整个做一次更新，就只需要对每个预测值做一次探索。
+            x_next_noise = x_next_pre + np.random.multivariate_normal(np.zeros((args.state_dim, )), args.explore_Cov) # 不同的t会得到相同的采样值吗？——不相同，但是能保证可重现
             target_Q = args.gamma * agent.value(x_hat, x_pre, P_pre_inv, h) + \
                     (x_next_noise - dyn.f(x_hat))@est.inv(args.Q)@(x_next_noise - dyn.f(x_hat)).T + \
                     (y - dyn.h(x_hat))@est.inv(args.R)@(y - dyn.h(x_hat)).T
             Q = agent.value(x_next_noise, x_next_pre, P_next_pre_inv, h_next)
-            delta = Q - target_Q
-            P_next_new_inv = P_next_pre_inv - args.lr_value * delta * ((x_next_noise - x_next_pre)@(x_next_noise - x_next_pre).T) # 梯度下降不能保证正定-不正定就不做更新直接跳过
+            delta = Q - target_Q  ## 说实在的，现在我并没有深入理解这个算法的理论依据是什么
+            P_next_new_inv = P_next_pre_inv - args.lr_value * delta * ((x_next_noise - x_next_pre)@(x_next_noise - x_next_pre).T) ## 梯度下降不能保证正定-不正定就不做更新直接跳过
             h_next_new = h_next - args.lr_value * delta
             replay_buffer.push(x_next_pre, y_next, P_next_new_inv, h_next_new)
             if replay_buffer.size > args.warmup_size : 
-                bxp, by, bPni, bh = replay_buffer.sample(args.batch_size)
-                agent.policy.update_weight(bxp, by, bPni, bh)
+                input_batch, output_batch = replay_buffer.sample(args.batch_size)
+                agent.policy.update_weight(input_batch, output_batch, lr=args.lr_policy)
 
             # error evaluate, MSE
             MSE[i] += (x - x_hat)**2 / args.max_steps
@@ -234,7 +221,7 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
     sys.stdout = sys.__stdout__
 
 
-def simulate(args, sim_num, STATUS='EKF') : ## 后续可以也改成用args传参数
+def simulate(args, sim_num, STATUS='EKF') : 
     # set random seed
     np.random.seed(sim_num)
     # generate disturbance and noise
@@ -331,8 +318,8 @@ def main() :
     parser = argparse.ArgumentParser()
     parser.add_argument("--max_episodes", default=500, type=int, help="max train episodes")
     parser.add_argument("--max_steps", default=200, type=int, help="max simulation steps")
-    parser.add_argument("--buffer_size", default=1e5, type=int, help="max size of replay buffer")
-    parser.add_argument("--batch_size", default=64, type=int, help="number of samples for batch update")
+    parser.add_argument("--buffer_size", default=1e4, type=int, help="max size of replay buffer")
+    parser.add_argument("--batch_size", default=32, type=int, help="number of samples for batch update")
     parser.add_argument("--warmup_size", default=200, type=int, help="decide when to start the training of the NN")
     parser.add_argument("--state_dim", default=2, type=int, help="dimension of state variable x")
     parser.add_argument("--obs_dim", default=1, type=int, help="dimension of measurement y")
@@ -340,7 +327,7 @@ def main() :
     parser.add_argument("--P0", default=np.array([[1,0],[0,1]]), help="Covariance of initial state distribution")
     parser.add_argument("--Q", default=np.array([[0.0001,0],[0,1]]), help="Covariance of process disturbance")
     parser.add_argument("--R", default=np.array([[0.01]]), help="Covariance of measurement noise")
-    parser.add_argument("--gamma", default=1.0, type=float, help="discount factor in value function")
+    parser.add_argument("--gamma", default=0.9, type=float, help="discount factor in value function")
     parser.add_argument("--lr_value", default=1e-3, type=float, help="learning rate of value function")
     parser.add_argument("--lr_policy", default=1e-3, type=float, help="learning rate of policy net")
     parser.add_argument("--explore_Cov", default=np.array([[0.01,0],[0,0.01]]), help="the covariance of Guassian distribution added to predicted state")
@@ -351,13 +338,14 @@ def main() :
 
     noise = OUnoise(args.state_dim)
     agent = RL_estimator(state_dim=args.state_dim, obs_dim=args.obs_dim, noise=noise, STATUS='test')
-    # init policy network
+    # init policy network ## 可以尝试没有初始样本的——没有初始样本的目前看来不太行
     x_pre_seq, y_seq, P_next_pre_seq = simulate(args, sim_num=22222, STATUS='init')
     x_pre_seq = np.insert(x_pre_seq, 0, args.x0_mu, axis=0)
     replay_buffer = ReplayBuffer(maxsize=args.buffer_size)
     for t in range(args.max_steps) : 
         replay_buffer.push_init(x_pre_seq[t], y_seq[t], P_next_pre_seq[t], 0)
-    agent.policy.update_weight(x_pre_seq, y_seq, P_next_pre_seq, np.zeros((200,)))
+    input_batch, output_batch = replay_buffer.sample(args.max_steps)
+    agent.policy.update_weight(input_batch, output_batch, lr=args.lr_policy)
     # save_path = os.path.join(args.output_dir, "model.bin")
     # torch.save(agent.policy.state_dict(), save_path)
 
