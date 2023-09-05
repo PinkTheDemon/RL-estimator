@@ -1,5 +1,6 @@
 import numpy as np
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, minimize
+from scipy.stats import multivariate_normal
 import dynamics as dyn
 
 # inverse of matrix M
@@ -23,26 +24,82 @@ def block_diag(matrix_list) :
     return bd_M
 
 # Extended Kalman Filter
-def EKF (state, P, obs_next, Q, R) : 
-    # linearization system matrix
-    F = np.array([[0.99,0.2],[-0.1,0.5*(1-state[1]**2)/(1+state[1]**2)**2]])
-    H = np.array([[1,-3]])
-    
+def EKF (x, P, y_next, Q, R) : 
+    # linearization system matrix 2 #####################
+    F = np.array([[.99, .2], [-.1, .5*(1-x[1]**2)/(1+x[1]**2)**2]])
+    H = np.array([[1, -3]])
+    # ###################################################
+
+    # linearization system matrix 2 #####################
+    # F = np.eye(x.size) + 0.1*np.array([[0, -1], [0.4*x[0]*x[1]+1, 0.2*(x[0]**2-1)]])
+    # H = np.array([[1, 0], [0, 1]])
+    # ###################################################
+
+    # linearization system matrix 3 #####################
+    # F = np.array([[.99, .2], [-.1, .5]])
+    # H = np.array([[1, -3]])
+    # ###################################################
+
     # predict
-    P_pre = F @ P @ F.T + Q
-    state_pre, obs_pre = dyn.step(state)
+    P_pre = F @ P @ F.T
+    if Q.size != 0 : P_pre = P_pre + Q
+    x_pre, y_pre = dyn.step(x)
     # update
     P_hat = inv(inv(P_pre) + H.T@inv(R)@H)
-    state_hat = state_pre - (P_hat@H.T@inv(R)@(obs_pre - obs_next).reshape((1,1))).T
-    state_hat = state_hat.reshape((2,))
+    x_hat = x_pre - (P_hat@H.T@inv(R)@(y_pre - y_next).T).T
+    x_hat = np.squeeze(x_hat)
 
-    return state_hat, P_hat
+    return x_hat, P_hat
+
+# Unscented Kalman Filter
+def UKF(state, P, obs_next, Q, R, alpha=.3, beta=2., kappa=-1.) : 
+    n = state.size
+    nw = Q.shape[1]
+    nv = R.shape[1]
+    na = n + nw + nv
+    lamda = alpha**2 * (na + kappa) - na
+
+    # calculate sigma points and weights
+    xa = np.hstack((state, np.zeros((nw, )), np.zeros((nv, ))))
+    xa_sigma = np.tile(xa, (2*na+1, 1))
+    M = (na+lamda)*block_diag([P, Q, R])
+    M = np.linalg.cholesky(M)
+    xa_sigma[1:na+1] = xa_sigma[1:na+1] + M
+    xa_sigma[na+1: ] = xa_sigma[na+1: ] - M
+    xx_sigma = xa_sigma[:, :n]
+    xw_sigma = xa_sigma[:,n:n+nw]
+    xv_sigma = xa_sigma[:,n+nw: ]
+    Wc = np.ones((2*na+1, )) * 0.5 / (na+lamda)
+    Wm = np.ones((2*na+1, )) * 0.5 / (na+lamda)
+    Wc[0] = lamda / (na + lamda)
+    Wm[0] = lamda / (na + lamda) + 1 - alpha**2 + beta
+
+    # time update
+    x_next_pre = np.array([dyn.f(xx_sigma[i], xw_sigma[i]).reshape((n,1)) for i in range(2*na+1)])
+    x_next_pre_aver = np.average(x_next_pre, weights=Wm, axis=0)
+    P_next_pre = np.zeros((n,n))
+    for i in range(2*na+1) : 
+        P_next_pre += Wc[i] * (x_next_pre[i] - x_next_pre_aver) @ (x_next_pre[i] - x_next_pre_aver).T
+
+    # measurement update ## 有一种是直接用上面的sigma点做y的预测的，还有一种是用上面算出来的x_pre_aver和P_pre重新选择sigma点做y预测的，下面先采用前者简单方式
+    y_next_pre = np.array([dyn.h(np.squeeze(x_next_pre[i]), xv_sigma[i]).reshape((nv,1)) for i in range(2*na+1)])
+    y_next_pre_aver = np.average(y_next_pre, weights=Wm, axis=0)
+    P_yy = np.zeros_like(R)
+    P_xy = np.zeros((n, nv))
+    for i in range(2*na+1) : 
+        P_yy += Wc[i] * (y_next_pre[i] - y_next_pre_aver) @ (y_next_pre[i] - y_next_pre_aver).T # 这里到底加不加R
+        P_xy += Wc[i] * (x_next_pre[i] - x_next_pre_aver) @ (y_next_pre[i] - y_next_pre_aver).T
+    K = P_xy @ inv(P_yy)
+    x_next_hat = x_next_pre_aver + K @ (obs_next[:, np.newaxis] - y_next_pre_aver)
+    P_next_hat = P_next_pre - K @ P_yy @ K.T
+
+    return x_next_hat.reshape((n, )), P_next_hat
 
 # solve one-step optimization problem to get state estimation, nonlinear least square filter
 def NLSF(state_mu, P, obs_next, Q, R) : 
     state_next_mu = dyn.f(state_mu)
     x0 = np.hstack((state_mu, state_next_mu))
-    result = least_squares(residual_fun, x0, jac_fun, method='lm', max_nfev=500, args=(state_mu, P, obs_next, Q, R))
+    result = least_squares(residual_fun, x0, method='lm', args=(state_mu, P, obs_next, Q, R)) # , max_nfev=8, jac_fun
     return result.x
 
 # residual function in NLSF
@@ -67,19 +124,129 @@ def jac_fun(x, state_mu, P, obs_next, Q, R) :
     L = block_diag([inv(P), inv(Q), inv(R)])
     L = np.linalg.cholesky(L)
 
+    # jac1 #####################################################
     J = np.array([[1,0,0,0],
                   [0,1,0,0],
-                  [-0.99,-0.2,1,0],
-                  [0.1,-0.5*(1-x[1]**2)/(1+x[1]**2)**2,0,1],
+                  [-.99,-.2,1,0],
+                  [.1,-.5*(1-x[1]**2)/(1+x[1]**2)**2,0,1],
                   [0,0,-1,3]])
+    # ##########################################################
+
+    # jac2 #####################################################
+    # J = np.array([[1,0,0,0],
+    #               [0,1,0,0],
+    #               [-1,0.1,1,0],
+    #               [-0.04*x[0]*x[1]-0.1,-0.02*x[0]**2-0.98,0,1],
+    #               [0,0,-1,0],
+    #               [0,0,0,-1]])
+    # ##########################################################
     return (L @ J)
 
+# unknown error in jac_fun, using optimize.minimize methods for comparision to find where the error is
+def OPTF(state_mu, P, obs_next, Q, R) : 
+    state_next_mu = dyn.f(state_mu)
+    x0 = np.hstack((state_mu, state_next_mu))
+    result = minimize(obj_fun, x0, args=(state_mu, P, obs_next, Q, R), method='Newton-CG', jac=opt_jac) # , options={'maxiter':8}
+    return result.x
 
-# if __name__ == '__main__' : 
-    # residual_fun(np.array([0,1,2,3]), np.array([1,2]), np.array([[1,0],[0,1]]), 3)
+def obj_fun(x, state_mu, P, obs_next, Q, R) : 
+    x_hat = x[:2]
+    x_next_hat = x[2:]
+    fx = dyn.f(x_hat)
+    hx_next = dyn.h(x_next_hat)
 
-    # state_mu = np.array([1,2])
-    # P = np.array([[1,0],[0,1]])
-    # obs_next = 3
-    # result = least_squares(residual_fun, np.array([1,2,1,2]), args=(state_mu, P, obs_next))
-    # print(result.x)
+    W = block_diag([inv(P), inv(Q), inv(R)])
+
+    f1 = (x_hat - state_mu)
+    f2 = (x_next_hat - fx)
+    f3 = (obs_next - hx_next)
+    f = np.hstack((f1, f2, f3))
+    f = f @ W @ f.T
+
+    return f
+
+def opt_jac(x, state_mu, P, obs_next, Q, R) : 
+    x_hat = x[:2]
+    x_next_hat = x[2:]
+    fx = dyn.f(x_hat)
+    hx_next = dyn.h(x_next_hat)
+    f1 = (x_hat - state_mu)
+    f2 = (x_next_hat - fx)
+    f3 = (obs_next - hx_next)
+    f = np.hstack((f1, f2, f3))
+
+    W = block_diag([inv(P), inv(Q), inv(R)])
+
+    # jac1 #####################################################
+    J = np.array([[1,0,0,0],
+                  [0,1,0,0],
+                  [-.99,-.2,1,0],
+                  [.1,-.5*(1-x[1]**2)/(1+x[1]**2)**2,0,1],
+                  [0,0,-1,3]])
+    # ##########################################################
+
+    # jac2 #####################################################
+    # J = np.array([[1,0,0,0],
+    #               [0,1,0,0],
+    #               [-1,0.1,1,0],
+    #               [-0.04*x[0]*x[1]-0.1,-0.02*x[0]**2-0.98,0,1],
+    #               [0,0,-1,0],
+    #               [0,0,0,-1]])
+    # ##########################################################
+
+    return 2*f @ W @ J
+
+
+class Particle_Filter() : 
+    def __init__(self, state_dim:int, obs_dim:int, num_particles:int, fx, hx, x0_mu, P0, threshold=None, rand_num=1111) -> None:
+        self.state_dim = state_dim
+        self.obs_dim   = obs_dim
+        self.N         = num_particles
+        self.fx        = fx
+        self.hx        = hx
+        self.threshold = self.N * 0.5 if threshold is None else threshold
+        np.random.seed(seed=rand_num)
+        self.create_gaussian_particles(x0_mu, P0, self.N)
+
+    def create_uniform_particles(self, state_dim, state_range, N) : 
+        self.particles = np.empty((N, state_dim))
+        for i in range(state_dim) : 
+            self.particles[:, i] = np.random.uniform(state_range[i][0], state_range[i][1], size=N)
+        self.weight = np.ones((N, ))/N
+
+    def create_gaussian_particles(self, mean, cov, N) : 
+        self.particles = np.random.multivariate_normal(mean, cov, N)
+        self.weight = np.ones((N, ))/N
+    
+    def predict(self, noise_Q, noise_mu=None, dt=.1) : 
+        if noise_mu is None : noise_mu = np.zeros((self.state_dim, ))
+        process_noise = np.random.multivariate_normal(noise_mu, noise_Q, self.N)
+        self.particles = self.fx(self.particles, process_noise, dt)
+
+    def update(self, observation, obs_noise_R) : 
+        for i in range(self.N) : 
+            self.weight[i] *= multivariate_normal(self.hx(self.particles[i]), obs_noise_R).pdf(observation)
+        
+        self.weight += 1.e-300          # avoid round-off to zero
+        self.weight /= sum(self.weight) # normalize
+
+    def estimate(self) : 
+        state_hat = np.average(self.particles, weights=self.weight, axis=0)
+        Cov_hat = np.cov(self.particles, rowvar=False, aweights=self.weight)
+
+        if self.neff() >= self.threshold : 
+            print(f'resample, Wneff={self.neff()}')
+            self.simple_resample()
+        return state_hat, Cov_hat
+    
+    def simple_resample(self) : 
+        cumulative_sum = np.cumsum(self.weight)
+        cumulative_sum[-1] = 1.  # avoid round-off error
+        indexes = np.searchsorted(cumulative_sum, np.random.rand(self.N))
+
+        # resample according to indexes
+        self.particles = self.particles[indexes]
+        self.weight = np.ones((self.N, ))/self.N
+
+    def neff(self) : 
+        return 1. / np.sum(np.square(self.weight))
