@@ -1,19 +1,60 @@
 import numpy as np
 
-def f(x, disturb=[0,0]) : 
-    # nolinear dynamics equation
-    x_next = np.copy(x)
-    x_next[0] = 0.99*x[0] + 0.2*x[1] + disturb[0]
-    x_next[1] = -0.1*x[0] + 0.5*x[1]/(1+x[1]**2) + disturb[1] 
-    return x_next
+def f(x, disturb=[], time_sample=.1) : 
+    x = x.T
+    # parameters for dynamic 3 ##############################
+    # beta0 = -.59783
+    # H0    = 13.406
+    # Gm0   = 3.9860e5
+    # R0    = 6374
+    # #######################################################
 
-def h(x, noise=0) : 
-    # measurement equation 
-    y = x[0] - 3*x[1] + noise
-    return np.array([y])
+    # dynamics 1 #########################################
+    x[0] = 0.99*x[1] + 0.2*x[1]
+    x[1] = -0.1*x[0] + 0.5*x[1]/(1+x[1]**2)
+    # ####################################################
 
-# system dynamics
-def step(x, disturb=[0,0], noise=0.0) : 
+    # xdot = np.zeros_like(x)
+    # dt = 0.01
+    # for _ in range(int(time_sample/dt)) : 
+    #     # dynamics 2 #########################################
+    #     # xdot[0] = -x[1]
+    #     # xdot[1] = -0.2*(1-x[0]**2)*x[1] + x[0]
+    #     # ####################################################
+
+    #     # dynamics 3 #########################################
+    #     # betak = beta0 * np.exp(x[4])
+    #     # rk = np.sqrt((x[0]-xr)**2 + (x[1]-yr)**2)
+    #     # Rk = np.sqrt(x[0]**2 + x[1]**2)
+    #     # Vk = np.sqrt(x[2]**2 + x[3]**2)
+    #     # Dk = -betak * np.exp((R0 - Rk)/H0) * Vk
+    #     # Gk = -
+    #     # xdot[0] = x[2]
+    #     # xdot[1] = x[3]
+    #     # xdot[2] = 
+    #     # ####################################################
+    #     x = x + dt*xdot
+    x = x.T
+
+    if len(disturb) == 0 : disturb = np.zeros_like(x)
+    x = x + disturb
+    return x
+
+def h(x, noise=[]) : 
+    # measurement equation 1 ###############################
+    x = x.T
+    y = x[0] - 3*x[1]
+    # ######################################################
+
+    # measurement equation 2 ###############################
+    # y = x
+    # ######################################################
+    if len(noise) == 0 : noise = np.zeros_like(y)
+    y = y + noise
+    return y
+
+# system dynamics ## 我感觉这个系统动态可能需要更换一个更合适的例子
+def step(x, disturb=[], noise=[]) : 
     x_next = f(x, disturb)
     y_next = h(x_next, noise)
 

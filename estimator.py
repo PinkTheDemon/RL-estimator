@@ -11,6 +11,11 @@ def inv(M) :
     
 # transfer matrix list to one block-diag matrix
 def block_diag(matrix_list) : 
+    delete = []
+    for i in range(len(matrix_list)) : 
+        if matrix_list[i].size == 0 : delete.append(i)
+    for _ in delete : matrix_list.pop(_)
+
     bd_M = matrix_list[0]
     for M in matrix_list[1:] : 
         bd_M = np.block([[bd_M, np.zeros((bd_M.shape[0], M.shape[1]))],
