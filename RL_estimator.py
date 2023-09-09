@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import argparse
 import os
 import sys
+import time
 from filterpy.kalman import MerweScaledSigmaPoints,UnscentedKalmanFilter
 
 import dynamics as dyn
@@ -179,7 +180,11 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
         MSE = np.zeros((args.max_episodes, args.state_dim))
         for t in range(args.max_train_steps) : 
             # dynamic, x is unobservable, y is observable
-            x_next, y_next = dyn.step(x, w_list[t], v_list[t])
+            if args.MODEL_MISMATCH == False : 
+                x_next,y_next = dyn.step(x,w_list[t],v_list[t])
+            else : 
+                x_next = real_fx(x, w_list[t])
+                y_next = real_hx(x_next, v_list[t])
 
             # get covarience matrix P 
             P_next_hat_inv, h_next = agent.get_Pinv(x_hat, y_next, P_hat_inv)
@@ -232,26 +237,29 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
     sys.stdout = sys.__stdout__
 
 
-
-def fx(x, time_sample=.1) : 
+def real_fx(x, disturb=[], time_sample=.1) : 
+    x = x.T
     x_next = np.copy(x)
-    x_next[0] = 0.99*x[1] + 0.2*x[1]
-    x_next[1] = -0.1*x[0] + 0.5*x[1]/(1+x[1]**2)
+    x_next[0] = 1.1*x[1] + 0.25*x[1]
+    x_next[1] = -0.15*x[0] + 0.55*x[1]/(1+x[1]**2)
     x = x_next
-
+    if len(disturb) == 0 : disturb = np.zeros_like(x)
+    x = x + disturb
     return x
 
-def hx(x) : 
+def real_hx(x, noise=[]) : 
     x = x.T
     y = x[0] - 3*x[1]
+    if len(noise) == 0 : noise = np.zeros_like(y)
+    y = y + noise
     return y
 
 
 def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') : 
-    if STATUS == 'NLS-RLF' : 
+    if STATUS == 'NLS-RLF' or STATUS == 'RLF' : 
         noise = OUnoise(state_dim=args.state_dim, rand_num=rand_num)
         agent = RL_estimator(args.state_dim, args.obs_dim, noise, hidden_layer=args.hidden_layer, STATUS='test')
-        model_path = os.path.join(args.output_dir, "model10000train.bin")
+        model_path = os.path.join(args.output_dir, args.model_file)
         agent.policy.load_state_dict(torch.load(model_path))
     # if STATUS == 'UKF' : 
         # points = MerweScaledSigmaPoints(2, alpha=1., beta=2., kappa=0.)
@@ -266,6 +274,7 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
     # initial set for criterion
     error = np.zeros((args.max_sim_steps,args.state_dim))
     MSE = 0
+    execution_time = 0
     for i in range(sim_num) : 
         # set random seed
         np.random.seed(rand_num+i)
@@ -283,8 +292,16 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
         # main circle
         for t in t_seq : 
             # real state
-            x_next,y_next = dyn.step(x,w_list[t,:],v_list[t])
+            if args.MODEL_MISMATCH == False : 
+                x_next,y_next = dyn.step(x,w_list[t],v_list[t])
+            else : 
+                x_next = real_fx(x, w_list[t])
+                y_next = real_hx(x_next, v_list[t])
 
+            # time record 
+            start_time = time.perf_counter()
+
+            # choose filter
             if STATUS == 'EKF' or STATUS=='init': 
                 # estimator Extended Kalman Filter
                 x_next_hat, P_next_hat = est.EKF(x_hat, P_hat, y_next, args.Q, args.R)
@@ -294,10 +311,14 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
                 # ukf.update(y_next)
                 # x_next_hat = ukf.x
                 # P_next_hat = ukf.P
-            elif STATUS == "PF" : 
+            elif STATUS == 'PF' : 
                 pf.predict(args.Q)
                 pf.update(y_next, args.R)
                 x_next_hat, P_next_hat = pf.estimate()
+            elif STATUS == 'RLF' : 
+                x_next_hat, _ = est.EKF(x_hat, P_hat, y_next, args.Q, args.R)
+                P_inv_next, _ = agent.get_Pinv(x_hat, y_next, est.inv(P_hat))
+                P_next_hat = est.inv(P_inv_next)
             elif STATUS == 'NLS-EKF' : 
                 # estimator Nonlinear Least Square-Extended Kalman Filter
                 result = est.NLSF(x_hat, P_hat, y_next, args.Q, args.R)
@@ -312,11 +333,15 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
                 _, P_next_hat = est.UKF(x_hat, P_hat, y_next, args.Q, args.R)
             elif STATUS == 'NLS-RLF' : 
                 # estimator Nonlinear Least Square-Reinforcement Learning Filter
-                P_inv_next, _ = agent.get_Pinv(x_hat, y_next, est.inv(P_hat))
-                P_next_hat = est.inv(P_inv_next)
                 result = est.NLSF(x_hat, P_hat, y_next, args.Q, args.R)
                 x_hat = result[ :2]
                 x_next_hat = result[2: ]
+                P_inv_next, _ = agent.get_Pinv(x_hat, y_next, est.inv(P_hat))
+                P_next_hat = est.inv(P_inv_next)
+
+            # time evaluate, ms
+            end_time = time.perf_counter()
+            execution_time += 1000 * (end_time - start_time) / args.max_sim_steps / sim_num
 
             # error evaluate, MSE
             MSE += (x_next - x_next_hat)**2 / args.max_sim_steps / sim_num
@@ -330,6 +355,10 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
             x = x_next
             x_hat = x_next_hat
             P_hat = P_next_hat
+
+    # evaluation criterion print
+    print(f"average execution time of {STATUS}: {execution_time}")
+    print(f"MSE of {STATUS}: {MSE}")
 
     if STATUS != 'init' : 
         # plot
@@ -364,14 +393,15 @@ def main() :
     parser.add_argument("--state_dim", default=2, type=int, help="dimension of state variable x")
     parser.add_argument("--obs_dim", default=1, type=int, help="dimension of measurement y")
     parser.add_argument("--x0_mu", default=np.array([0, 0]), help="average of initial state distribution")
-    parser.add_argument("--P0", default=np.array([[1., 0],[0, 1.]]), help="Covariance of initial state distribution")
-    parser.add_argument("--x0_hat", default=np.array([0, 0]), help="average of initial state distribution")
-    parser.add_argument("--P0_hat", default=np.array([[1., 0],[0, 1.]]), help="Covariance of initial state distribution")
-    parser.add_argument("--Q", default=np.array([[1e-2, 0],[0, 1.]]), help="Covariance of process disturbance")
-    parser.add_argument("--R", default=np.array([[1e-2]]), help="Covariance of measurement noise")
+    parser.add_argument("--P0", default=np.array([[1., 0],[0, 1.]]), help="covariance of initial state distribution")
+    parser.add_argument("--x0_hat", default=np.array([0, 0]), help="estimation of initial state distribution average")
+    parser.add_argument("--P0_hat", default=np.array([[1., 0],[0, 1.]]), help="estimation of initial state distribution covariance")
+    parser.add_argument("--Q", default=np.array([[.01, 0],[0, 1.]]), help="covariance of process disturbance")
+    parser.add_argument("--R", default=np.array([[1e-2]]), help="covariance of measurement noise")
+    parser.add_argument("--MODEL_MISMATCH", default=False, type=bool, help="choose whether to apply model mismatch")
 
     # training parameters
-    parser.add_argument("--max_episodes", default=1000, type=int, help="max train episodes")
+    parser.add_argument("--max_episodes", default=500, type=int, help="max train episodes")
     parser.add_argument("--max_train_steps", default=200, type=int, help="max simulation steps")
     parser.add_argument("--max_sim_steps", default=1000, type=int, help="max simulation steps")
     parser.add_argument("--buffer_size", default=1e4, type=int, help="max size of replay buffer")
@@ -387,23 +417,25 @@ def main() :
     # file path
     parser.add_argument("--output_dir", default="output", type=str, help="path for files to save outputs such as model")
     parser.add_argument("--output_file", default="output/log.txt", type=str, help="file to save training messages")
+    parser.add_argument("--model_file", default="model10000train.bin", type=str, help="trained model")
 
     args = parser.parse_args()
 
+    # args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # noise = OUnoise(args.state_dim)
     # agent = RL_estimator(state_dim=args.state_dim, obs_dim=args.obs_dim, noise=noise, hidden_layer=args.hidden_layer, STATUS='test')
+    # agent.policy.to(args.device)
     # # init policy network ## 可以尝试没有初始样本的——没有初始样本的目前看来不太行
     # x_hat_seq, y_seq, P_next_hat_seq = simulate(args, rand_num=22222, STATUS='init')
     # x_hat_seq = np.insert(x_hat_seq, 0, args.x0_hat, axis=0)
     # P_next_hat_seq = np.insert(P_next_hat_seq, 0, args.P0_hat, axis=0)
     # replay_buffer = ReplayBuffer(maxsize=args.buffer_size)
-    # for t in range(args.max_steps) : 
+    # for t in range(args.max_train_steps) : 
     #     replay_buffer.push_init(x_hat_seq[t], y_seq[t], est.inv(P_next_hat_seq[t]), est.inv(P_next_hat_seq[t+1]), 0)
-    # input_batch, output_batch = replay_buffer.sample(args.max_steps)
+    # input_batch, output_batch = replay_buffer.sample(args.max_train_steps)
     # agent.policy.update_weight(input_batch, output_batch, lr=args.lr_policy_min)
     # # save_path = os.path.join(args.output_dir, "model.bin")
     # # torch.save(agent.policy.state_dict(), save_path)
-
     # train(args, agent, replay_buffer)
 
     simulate(args, sim_num=50, rand_num=10086, STATUS='NLS-RLF')
