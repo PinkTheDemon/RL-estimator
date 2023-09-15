@@ -347,15 +347,32 @@ main函数：{
 
 ![](picture/dynamic1.png)
 
+训练参数以及仿真设置：
+
+<img src="picture/paras_model10000train.png" style="zoom:80%;" />
+
 
 
 ### 20230905 进一步测试
 
 - 对网络结构进行了修改，发现还是上次的10*200效果最好。
-- 训练时是T=200的仿真长度，尝试在T=1000的仿真长度下进行测试，得到的效果如下，初步结论是训练所得到的网络能够学习出正确的依赖关系
+- 训练时是max_sim_steps=200的仿真长度，尝试在max_sim_steps=1000的仿真长度下进行测试，得到的效果如下，初步结论是训练所得到的网络能够学习出正确的依赖关系
 
 ![](picture/dynamic1(200trn1000sim).png)
 
-- 去掉NLS，单用RLF？
+- 去掉NLS，单用RLF？——在EKF和NLS-EKF之间，毕竟也不是按这种方式来训练的。
+
+![](picture/dynamic1(RLFwithoutNLS).png)
+
 - 增加窗口长度？
-- 增加模型失配？
+- 增加模型失配？——效果并不算好，原因可能在于训练过程本身显式依赖于模型，因为训练用的数据（TDerror）来自于依赖于模型的计算。
+
+![](picture/dynamic1(model_mismatch).png)
+
+
+
+### 20230915 错误但有效的结果
+
+在输入中补充了h(以前只有P)，确实得到了进一步的提升，仿真效果如下，（对比之前的数据）效果略优于NLS-UKF，几乎与UKF持平
+
+![](picture/dynamic1(P h input).png)
