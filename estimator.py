@@ -98,7 +98,7 @@ def UKF(state, P, obs_next, Q, R, alpha=.3, beta=2., kappa=-1.) :
 # solve one-step optimization problem to get state estimation, nonlinear least square filter
 def NLSF(state_hat, P_pre, obs_next_list, Q, R) : 
     x0 = [state_hat]
-    for i in range(len(obs_next_list)) : x0.append(x0[-1])
+    for i in range(len(obs_next_list)) : x0.append(dyn.f(x0[-1]))
     x0 = np.array(x0).reshape(-1)
     result = least_squares(residual_fun, x0, method='lm', args=(state_hat, P_pre, obs_next_list, Q, R)) # , max_nfev=8, jac=jac_fun
     return result.x
@@ -115,7 +115,7 @@ def residual_fun(x, state_hat, P_pre, obs_next_list, Q, R) :
         if i > 0 : hx.append(dyn.h(x_hat[i]))
 
     f1 = np.tile(np.array(x_hat[0] - state_hat), (1,1))
-    f2 = np.array([(x_hat[i]-fx[i]) for i in range(1, num_var)])
+    f2 = np.array([(x_hat[i]-fx[i-1]) for i in range(1, num_var)])
     f3 = np.array([(obs_next_list[i] - hx[i]) for i in range(num_var-1)])
 
     delete_list = []
