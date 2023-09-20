@@ -96,40 +96,60 @@ def UKF(state, P, obs_next, Q, R, alpha=.3, beta=2., kappa=-1.) :
     return x_next_hat.reshape((n, )), P_next_hat
 
 # solve one-step optimization problem to get state estimation, nonlinear least square filter
-def NLSF(state_mu, P, obs_next, Q, R) : 
-    state_next_mu = dyn.f(state_mu)
-    x0 = np.hstack((state_mu, state_next_mu))
-    result = least_squares(residual_fun, x0, method='lm', args=(state_mu, P, obs_next, Q, R)) # , max_nfev=8, jac_fun
+def NLSF(state_hat, P_pre, obs_next_list, Q, R) : 
+    x0 = [state_hat]
+    for i in range(len(obs_next_list)) : x0.append(x0[-1])
+    x0 = np.array(x0).reshape(-1)
+    result = least_squares(residual_fun, x0, method='lm', args=(state_hat, P_pre, obs_next_list, Q, R)) # , max_nfev=8, jac=jac_fun
     return result.x
 
 # residual function in NLSF
-def residual_fun(x, state_mu, P, obs_next, Q, R) : 
-    x_hat = x[:2]
-    x_next_hat = x[2:]
-    fx = dyn.f(x_hat)
-    hx_next = dyn.h(x_next_hat)
+def residual_fun(x, state_hat, P_pre, obs_next_list, Q, R) : 
+    num_var = len(obs_next_list) + 1
+    x_hat = []
+    fx    = []
+    hx    = []
+    for i in range(num_var) : 
+        x_hat.append(x[2*i:2*i+2])
+        fx.append(dyn.f(x_hat[i]))
+        if i > 0 : hx.append(dyn.h(x_hat[i]))
 
-    L = block_diag([inv(P), inv(Q), inv(R)])
+    f1 = np.tile(np.array(x_hat[0] - state_hat), (1,1))
+    f2 = np.array([(x_hat[i]-fx[i]) for i in range(1, num_var)])
+    f3 = np.array([(obs_next_list[i] - hx[i]) for i in range(num_var-1)])
+
+    delete_list = []
+    for i in range(Q.shape[0]) : 
+        if Q[i,i] == 0 : delete_list.append(i)
+    Q = np.delete(Q, delete_list, axis=0)
+    Q = np.delete(Q, delete_list, axis=1)
+    f2 = np.delete(f2, delete_list, axis=1)
+    delete_list = []
+    for i in range(R.shape[0]) : 
+        if R[i,i] == 0 : delete_list.append(i)
+    R = np.delete(R, delete_list, axis=0)
+    R = np.delete(R, delete_list, axis=1)
+    f3 = np.delete(f3, delete_list, axis=1)
+    f = np.hstack((f1, f2.reshape(1,-1), f3.reshape(1,-1)))
+
+    Q = block_diag([Q for i in range(num_var-1)])
+    R = block_diag([R for i in range(num_var-1)])
+    L = block_diag([inv(P_pre), inv(Q), inv(R)])
     L = np.linalg.cholesky(L)
 
-    f1 = (x_hat - state_mu)
-    f2 = (x_next_hat - fx)
-    f3 = (obs_next - hx_next)
-    f = np.hstack((f1, f2, f3))
-    f = f @ L
+    f = (f @ L).reshape(-1)
 
     return f
 
-def jac_fun(x, state_mu, P, obs_next, Q, R) : 
-    L = block_diag([inv(P), inv(Q), inv(R)])
-    L = np.linalg.cholesky(L)
-
+def jac_fun(x, state_pre, P_pre, obs_next_list, Q, R) : 
+    num_obs = len(obs_next_list)
+    dim_state = state_pre.size
+    J = np.array([[1,0],
+                  [0,1]])
     # jac1 #####################################################
-    J = np.array([[1,0,0,0],
-                  [0,1,0,0],
-                  [-.99,-.2,1,0],
-                  [.1,-.5*(1-x[1]**2)/(1+x[1]**2)**2,0,1],
-                  [0,0,-1,3]])
+    jadd = lambda x : np.array([[-.99, -.2                           , 1, 0],
+                                [ .1 , -.5*(1-x[1]**2)/(1+x[1]**2)**2, 0, 1],
+                                [ 0  ,  0                            ,-1, 3]])
     # ##########################################################
 
     # jac2 #####################################################
@@ -140,24 +160,48 @@ def jac_fun(x, state_mu, P, obs_next, Q, R) :
     #               [0,0,-1,0],
     #               [0,0,0,-1]])
     # ##########################################################
+
+    # delete_list = []
+    # for i in range(Q.shape[0]) : 
+    #     if Q[i,i] == 0 : delete_list.append(i)
+    # Q = np.delete(Q, delete_list, axis=0)
+    # Q = np.delete(Q, delete_list, axis=1)
+    # J = np.delete(J, (state_pre.size+np.array(delete_list)).tolist(), axis=0)
+    # delete_list = []
+    # for i in range(R.shape[0]) : 
+    #     if R[i,i] == 0 : delete_list.append(i)
+    # R = np.delete(R, delete_list, axis=0)
+    # R = np.delete(R, delete_list, axis=1)
+    # J = np.delete(J, (state_pre.size+Q.shape[0]+np.array(delete_list)).tolist(), axis=0)
+
+    for i in range(num_obs) : 
+        J = np.pad(J, ((0,0), (0,dim_state)), mode='constant')
+        Jadd = np.pad(jadd(x[2*i:2*i+2]), ((0,0), (i*dim_state,0)), mode='constant')
+        J = np.vstack((J, Jadd))
+
+    Q = block_diag([Q for i in range(num_obs)])
+    R = block_diag([R for i in range(num_obs)])
+    L = block_diag([inv(P_pre), inv(Q), inv(R)])
+    L = np.linalg.cholesky(L)
+
     return (L @ J)
 
 # unknown error in jac_fun, using optimize.minimize methods for comparision to find where the error is
-def OPTF(state_mu, P, obs_next, Q, R) : 
-    state_next_mu = dyn.f(state_mu)
-    x0 = np.hstack((state_mu, state_next_mu))
-    result = minimize(obj_fun, x0, args=(state_mu, P, obs_next, Q, R), method='Newton-CG', jac=opt_jac) # , options={'maxiter':8}
+def OPTF(state_pre, P_pre, obs_next, Q, R) : 
+    state_next_pre = dyn.f(state_pre)
+    x0 = np.hstack((state_pre, state_next_pre))
+    result = minimize(obj_fun, x0, args=(state_pre, P_pre, obs_next, Q, R), method='Newton-CG', jac=opt_jac) # , options={'maxiter':8}
     return result.x
 
-def obj_fun(x, state_mu, P, obs_next, Q, R) : 
+def obj_fun(x, state_pre, P_pre, obs_next, Q, R) : 
     x_hat = x[:2]
     x_next_hat = x[2:]
     fx = dyn.f(x_hat)
     hx_next = dyn.h(x_next_hat)
 
-    W = block_diag([inv(P), inv(Q), inv(R)])
+    W = block_diag([inv(P_pre), inv(Q), inv(R)])
 
-    f1 = (x_hat - state_mu)
+    f1 = (x_hat - state_pre)
     f2 = (x_next_hat - fx)
     f3 = (obs_next - hx_next)
     f = np.hstack((f1, f2, f3))
@@ -165,17 +209,17 @@ def obj_fun(x, state_mu, P, obs_next, Q, R) :
 
     return f
 
-def opt_jac(x, state_mu, P, obs_next, Q, R) : 
+def opt_jac(x, state_pre, P_pre, obs_next, Q, R) : 
     x_hat = x[:2]
     x_next_hat = x[2:]
     fx = dyn.f(x_hat)
     hx_next = dyn.h(x_next_hat)
-    f1 = (x_hat - state_mu)
+    f1 = (x_hat - state_pre)
     f2 = (x_next_hat - fx)
     f3 = (obs_next - hx_next)
     f = np.hstack((f1, f2, f3))
 
-    W = block_diag([inv(P), inv(Q), inv(R)])
+    W = block_diag([inv(P_pre), inv(Q), inv(R)])
 
     # jac1 #####################################################
     J = np.array([[1,0,0,0],

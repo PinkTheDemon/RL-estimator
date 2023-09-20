@@ -54,6 +54,7 @@ class Actor(nn.Module) :
         output = self.fc[0](input)
         for fc in self.fc[1:] : 
             output = fc(F.relu(output))
+        output[-1] = F.relu(output[-1])
         return output
 
     def update_weight(self, bin, bot, lr=1e-3) : 
@@ -202,14 +203,14 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
             P_next_hat_inv, h_next = agent.get_Pinv(x_hat, y_next, P_hat_inv, h)
 
             # solve optimization problem, get x_next_hat
-            result = est.NLSF(x_hat, est.inv(P_hat_inv), y_next, args.Q, args.R)
+            result = est.NLSF(x_hat, est.inv(P_hat_inv), [y_next], args.Q, args.R)
             # result = est.OPTF(x_pre, est.inv(P_pre_inv), y, args.Q, args.R)
             x_hat_new = result[ :args.state_dim]
             x_next_hat = result[args.state_dim: ]
 
             # training 
             # if t > 0 : 
-            x_next_noise = x_next_hat + np.random.multivariate_normal(np.zeros((args.state_dim, )), args.explore_Cov) # 不同的t会得到相同的采样值吗？——不相同，但是能保证可重现
+            x_next_noise = x_next_hat + np.random.multivariate_normal(np.zeros((args.state_dim, )), args.explore_Cov) ## 这里用OUnoise会不会提升训练效率？
             target_Q = args.gamma * agent.value(x_hat, x_hat_new, P_hat_inv, h) + \
                     (x_next_noise - dyn.f(x_hat))@est.inv(args.Q)@(x_next_noise - dyn.f(x_hat)).T + \
                     (y_next - dyn.h(x_hat))@est.inv(args.R)@(y_next - dyn.h(x_hat)).T ## 写错了
@@ -240,7 +241,7 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
             save_path = os.path.join(args.output_dir, args.model_file)
             torch.save(agent.policy.state_dict(), save_path)
             num_noupdate = 0
-        elif num_noupdate > 50 and (args.lr_policy/2) > args.lr_policy_min : 
+        elif num_noupdate >= 50 and (args.lr_policy/2) > args.lr_policy_min : 
             args.lr_policy /= 2
             print("lr_policy update")
             num_noupdate = 0
@@ -336,19 +337,19 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
                 P_next_hat = est.inv(P_inv_next)
             elif STATUS == 'NLS-EKF' : 
                 # estimator Nonlinear Least Square-Extended Kalman Filter
-                result = est.NLSF(x_hat, P_hat, y_next, args.Q, args.R)
+                result = est.NLSF(x_hat, P_hat, [y_next], args.Q, args.R)
                 # result1 = est.OPTF(x_hat, P_hat, y_next, args.Q, args.R)
                 x_hat = result[ :2]
                 x_next_hat = result[2: ]
                 _, P_next_hat = est.EKF(x_hat, P_hat, y_next, args.Q, args.R)
             elif STATUS == 'NLS-UKF' : 
-                result = est.NLSF(x_hat, P_hat, y_next, args.Q, args.R)
+                result = est.NLSF(x_hat, P_hat, [y_next], args.Q, args.R)
                 x_hat = result[ :2]
                 x_next_hat = result[2: ]
                 _, P_next_hat = est.UKF(x_hat, P_hat, y_next, args.Q, args.R)
             elif STATUS == 'NLS-RLF' : 
                 # estimator Nonlinear Least Square-Reinforcement Learning Filter
-                result = est.NLSF(x_hat, P_hat, y_next, args.Q, args.R)
+                result = est.NLSF(x_hat, P_hat, [y_next], args.Q, args.R)
                 x_hat = result[ :2]
                 x_next_hat = result[2: ]
                 P_inv_next, h_next = agent.get_Pinv(x_hat, y_next, est.inv(P_hat), h)
@@ -452,7 +453,7 @@ def main() :
     for t in range(args.max_train_steps) : 
         replay_buffer.push_init(x_hat_seq[t], y_seq[t], est.inv(P_hat_seq[t]), 0, est.inv(P_hat_seq[t+1]), 0)
     input_batch, output_batch = replay_buffer.sample(args.max_train_steps)
-    agent.policy.update_weight(input_batch, output_batch, lr=args.lr_policy)
+    agent.policy.update_weight(input_batch, output_batch, lr=1e-2)
     # save_path = os.path.join(args.output_dir, "model.bin")
     # torch.save(agent.policy.state_dict(), save_path)
     train(args, agent, replay_buffer)
