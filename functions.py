@@ -7,7 +7,7 @@ def P2o( P, h=None) :
     try : 
         L = np.linalg.cholesky(P)
     except np.linalg.LinAlgError : # 矩阵非正定
-        return 'error'
+        return None
 
     out = []
     for i in range(L.shape[0]) : 
