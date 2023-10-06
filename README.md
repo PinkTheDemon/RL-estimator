@@ -376,3 +376,13 @@ main函数：{
 在输入中补充了h(以前只有P)，确实得到了进一步的提升，仿真效果如下，（对比之前的数据）效果略优于NLS-UKF，几乎与UKF持平
 
 ![](picture/dynamic1(P h input).png)
+
+
+
+### 20231006 阶段性修改
+
+1、修改代码结构，现在基本只需要修改dynamics和main两个文件即可。
+
+2、修改系统动态，现在用的是11. Adaptive Gaussian sum filter for nonlinear Bayesian estimation里面的example2，Lorenz system，另外为了确定方向，增加了一个观测量y[1]=x[0]。
+
+3、NLSF的jac矩阵问题得到解决，问题在于系数矩阵做cholesky分解时，需要上三角矩阵，而之前用的是下三角格式。
