@@ -147,15 +147,15 @@ class RL_estimator :
         self.OUnoise = noise
         self.STATUS = STATUS
 
-    def value(state, state_pre, Pinv, h=None, Transpose=False) : 
+    def value(self, state, state_pre, Pinv, h=None, Transpose=False) : 
         if Transpose : 
             quad = lambda x1, x2, W : (x1 - x2).T @ W @ (x1 - x2)
         else : 
             quad = lambda x1, x2, W : (x1 - x2) @ W @ (x1 - x2).T
 
         batch_size = state.shape[0]
-        Q = [quad(state[i], state_pre[i], Pinv[i]) for i in range(batch_size)]
-        Q = np.array(Q)
+        Q = [quad(np.tile(state[i],(1,1)), np.tile(state_pre[i],(1,1)), Pinv[i]) for i in range(batch_size)]
+        Q = np.squeeze(np.array(Q))
         if h is not None : Q += h
         return Q
 
@@ -233,7 +233,7 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
             x_next_hat = result[ds: ]
 
             # push experience into replay buffer
-            replay_buffer.push(zip([x_hat], [x_hat_new], [x_next_hat], [y_next], [P_hat_inv], [P_next_hat_inv], [h], [h_next]), None)
+            replay_buffer.push([[x_hat], [x_hat_new], [x_next_hat], [y_next], [P_hat_inv], [P_next_hat_inv], [h], [h_next]], None)
 
             # training ## 采样之后再做新P和新h的计算
             if replay_buffer.size > args.warmup_size : 
@@ -252,15 +252,14 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
                     h_next_batch         = []
                     for input,judge in zip(in_list,is_init) : 
                         if not judge : 
-                            x_hat, x_hat_new, x_next_hat, y_next, P_hat_inv, P_next_hat_inv, h, h_next = zip(*input)
-                            x_hat_batch          += x_hat
-                            x_hat_new_batch      += x_hat_new
-                            x_next_hat_batch     += x_next_hat
-                            y_next_batch         += y_next
-                            P_hat_inv_batch      += P_hat_inv
-                            P_next_hat_inv_batch += P_next_hat_inv
-                            h_batch              += h
-                            h_next_batch         += h_next
+                            x_hat_batch          += input[0]
+                            x_hat_new_batch      += input[1]
+                            x_next_hat_batch     += input[2]
+                            y_next_batch         += input[3]
+                            P_hat_inv_batch      += input[4]
+                            P_next_hat_inv_batch += input[5]
+                            h_batch              += input[6]
+                            h_next_batch         += input[7]
                     x_hat_batch          = np.array(x_hat_batch)
                     x_hat_new_batch      = np.array(x_hat_new_batch)
                     x_next_hat_batch     = np.array(x_next_hat_batch)
@@ -278,9 +277,9 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
                     Q_batch = agent.value(x_next_noise_batch, x_next_hat_batch, P_next_hat_inv_batch, h_next_batch)
                     delta = Q_batch - target_Q_batch
                     P_next_new_inv_batch = P_next_hat_inv_batch - args.lr_value * np.array([delta[index] * \
-                                            agent.value(x_next_noise_batch, x_next_hat_batch, np.ones(size,1), Transpose=True)[index] for index in range(size)])
+                                            agent.value(x_next_noise_batch, x_next_hat_batch, np.ones((size,1,1)), Transpose=True)[index] for index in range(size)])
                     h_next_new_batch = h_next_batch - args.lr_value * delta
-                    input_batch = np.concatenate(x_hat_batch, y_next_batch, [P2o(P_hat_inv_batch[index], h_batch[index]) for index in range(size)], axis=1).tolist()
+                    input_batch = np.concatenate((x_hat_batch, y_next_batch, [P2o(P_hat_inv_batch[index], h_batch[index]) for index in range(size)]), axis=1).tolist()
                     output_batch = [P2o(P_next_new_inv_batch[index], h_next_new_batch[index]) for index in range(size)]
                     del_list = []
                     for n in range(size) : 
