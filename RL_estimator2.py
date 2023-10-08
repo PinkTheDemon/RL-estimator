@@ -9,132 +9,133 @@ import argparse
 import os
 import sys
 import time
-from filterpy.kalman import MerweScaledSigmaPoints,UnscentedKalmanFilter
+# from filterpy.kalman import MerweScaledSigmaPoints,UnscentedKalmanFilter
 
 import dynamics as dyn
 import estimator as est
 from OUnoise import OUnoise
 from actor import * # 包括torch等
 from functions import * # 包括np
+from replay_buffer import ReplayBuffer
 
 
-class ReplayBuffer : 
-    def __init__(self, maxsize:int) -> None:
-        self.maxsize = maxsize
-        self.size = 0
-        self.size_init = 0
-        self.count = 0
-        self.x_hat          = []
-        self.x_hat_new      = []
-        self.x_next_hat     = []
-        self.y_next         = []
-        self.P_hat_inv      = []
-        self.P_next_hat_inv = []
-        self.h              = []
-        self.h_next         = []
-        self.input_init = list()
-        self.output_init = list()
+# class ReplayBuffer : 
+#     def __init__(self, maxsize:int) -> None:
+#         self.maxsize = maxsize
+#         self.size = 0
+#         self.size_init = 0
+#         self.count = 0
+#         self.x_hat          = []
+#         self.x_hat_new      = []
+#         self.x_next_hat     = []
+#         self.y_next         = []
+#         self.P_hat_inv      = []
+#         self.P_next_hat_inv = []
+#         self.h              = []
+#         self.h_next         = []
+#         self.input_init = list()
+#         self.output_init = list()
 
-    # def push_init(self, state_pre, obs, P_inv, h, Pinv_next, h_next) : # 初始样本人为确保正确性，就不判断正定了
-    #     output_last = P2o(P_inv, h)
-    #     input = np.hstack((state_pre, obs, output_last))
-    #     output = P2o(Pinv_next, h_next)
-    #     self.input_init.append(input)
-    #     self.output_init.append(output)
-    #     self.size_init += 1
+#     # def push_init(self, state_pre, obs, P_inv, h, Pinv_next, h_next) : # 初始样本人为确保正确性，就不判断正定了
+#     #     output_last = P2o(P_inv, h)
+#     #     input = np.hstack((state_pre, obs, output_last))
+#     #     output = P2o(Pinv_next, h_next)
+#     #     self.input_init.append(input)
+#     #     self.output_init.append(output)
+#     #     self.size_init += 1
 
-    def push(self, x_hat, x_hat_new, x_next_hat, y_next, P_hat_inv, P_next_hat_inv, h, h_next) : 
-        try : 
-            np.linalg.cholesky(P_next_hat_inv)
-        except np.linalg.LinAlgError : # 矩阵非正定
-            print('new P matrix is not positive definite')
-            return
+#     def push(self, x_hat, x_hat_new, x_next_hat, y_next, P_hat_inv, P_next_hat_inv, h, h_next) : 
+#         try : 
+#             np.linalg.cholesky(P_next_hat_inv)
+#         except np.linalg.LinAlgError : # 矩阵非正定
+#             print('new P matrix is not positive definite')
+#             return
 
-        if self.size < self.maxsize : 
-            self.x_hat.append(x_hat)
-            self.x_hat_new.append(x_hat_new)
-            self.x_next_hat.append(x_next_hat)
-            self.y_next.append(y_next)
-            self.P_hat_inv.append(P_hat_inv)
-            self.P_next_hat_inv.append(P_next_hat_inv)
-            self.h.append(h)
-            self.h_next.append(h_next)
-            self.size += 1
-        else : 
-            self.x_hat[self.count]          = x_hat
-            self.x_hat_new[self.count]      = x_hat_new
-            self.x_next_hat[self.count]     = x_next_hat
-            self.y_next[self.count]         = y_next
-            self.P_hat_inv[self.count]      = P_hat_inv
-            self.P_next_hat_inv[self.count] = P_next_hat_inv
-            self.h[self.count]              = h
-            self.h_next[self.count]         = h_next
-            self.count += 1
-            self.count = int(self.count % self.maxsize)
+#         if self.size < self.maxsize : 
+#             self.x_hat.append(x_hat)
+#             self.x_hat_new.append(x_hat_new)
+#             self.x_next_hat.append(x_next_hat)
+#             self.y_next.append(y_next)
+#             self.P_hat_inv.append(P_hat_inv)
+#             self.P_next_hat_inv.append(P_next_hat_inv)
+#             self.h.append(h)
+#             self.h_next.append(h_next)
+#             self.size += 1
+#         else : 
+#             self.x_hat[self.count]          = x_hat
+#             self.x_hat_new[self.count]      = x_hat_new
+#             self.x_next_hat[self.count]     = x_next_hat
+#             self.y_next[self.count]         = y_next
+#             self.P_hat_inv[self.count]      = P_hat_inv
+#             self.P_next_hat_inv[self.count] = P_next_hat_inv
+#             self.h[self.count]              = h
+#             self.h_next[self.count]         = h_next
+#             self.count += 1
+#             self.count = int(self.count % self.maxsize)
 
-    def sample(self, n:int, args) : 
-        indices = np.random.randint(self.size+self.size_init, size=n)
-        x_hat_batch          = []
-        x_hat_new_batch      = []
-        x_next_hat_batch     = []
-        y_next_batch         = []
-        P_hat_inv_batch      = []
-        P_next_hat_inv_batch = []
-        h_batch              = []
-        h_next_batch         = []
-        bin = []
-        bot = []
-        for i in indices : 
-            if i < self.size : 
-                x_hat_batch.append(self.x_hat[i])
-                x_hat_new_batch.append(self.x_hat_new[i])
-                x_next_hat_batch.append(self.x_next_hat[i])
-                y_next_batch.append(self.y_next[i])
-                P_hat_inv_batch.append(self.P_hat_inv[i])
-                P_next_hat_inv_batch.append(self.P_next_hat_inv[i])
-                h_batch.append(self.h[i])
-                h_next_batch.append(self.h_next[i])
-            else : 
-                bin.append(self.input_init[i-self.size])
-                bot.append(self.output_init[i-self.size])
-        size = len(x_hat_batch)
-        x_hat_batch          = np.array(x_hat_batch)
-        x_hat_new_batch      = np.array(x_hat_new_batch)
-        x_next_hat_batch     = np.array(x_next_hat_batch)
-        y_next_batch         = np.array(y_next_batch)
-        P_hat_inv_batch      = np.array(P_hat_inv_batch)
-        P_next_hat_inv_batch = np.array(P_next_hat_inv_batch)
-        h_batch              = np.array(h_batch)
-        h_next_batch         = np.array(h_next_batch)
-        Q_inv_batch          = np.tile(inv(args.Q), (size, 1, 1))
-        R_inv_batch          = np.tile(inv(args.R), (size, 1, 1))
+#     def sample(self, n:int, args) : 
+#         indices = np.random.randint(self.size+self.size_init, size=n)
+#         x_hat_batch          = []
+#         x_hat_new_batch      = []
+#         x_next_hat_batch     = []
+#         y_next_batch         = []
+#         P_hat_inv_batch      = []
+#         P_next_hat_inv_batch = []
+#         h_batch              = []
+#         h_next_batch         = []
+#         bin = []
+#         bot = []
+#         for i in indices : 
+#             if i < self.size : 
+#                 x_hat_batch.append(self.x_hat[i])
+#                 x_hat_new_batch.append(self.x_hat_new[i])
+#                 x_next_hat_batch.append(self.x_next_hat[i])
+#                 y_next_batch.append(self.y_next[i])
+#                 P_hat_inv_batch.append(self.P_hat_inv[i])
+#                 P_next_hat_inv_batch.append(self.P_next_hat_inv[i])
+#                 h_batch.append(self.h[i])
+#                 h_next_batch.append(self.h_next[i])
+#             else : 
+#                 bin.append(self.input_init[i-self.size])
+#                 bot.append(self.output_init[i-self.size])
+#         size = len(x_hat_batch)
+#         x_hat_batch          = np.array(x_hat_batch)
+#         x_hat_new_batch      = np.array(x_hat_new_batch)
+#         x_next_hat_batch     = np.array(x_next_hat_batch)
+#         y_next_batch         = np.array(y_next_batch)
+#         P_hat_inv_batch      = np.array(P_hat_inv_batch)
+#         P_next_hat_inv_batch = np.array(P_next_hat_inv_batch)
+#         h_batch              = np.array(h_batch)
+#         h_next_batch         = np.array(h_next_batch)
+#         Q_inv_batch          = np.tile(inv(args.Q), (size, 1, 1))
+#         R_inv_batch          = np.tile(inv(args.R), (size, 1, 1))
 
-        if size > 0 : 
-            x_next_noise_batch = x_next_hat_batch + np.random.multivariate_normal(np.zeros((args.state_dim, )), args.explore_Cov, size) # 不同的t会得到相同的采样值吗？——不相同，但是能保证可重现
-            target_Q_batch = args.gamma * quad_value(x_hat_batch, x_hat_new_batch, P_hat_inv_batch, h_batch) + \
-                                quad_value(x_next_noise_batch, dyn.f(x_hat_new_batch), Q_inv_batch) + \
-                                quad_value(y_next_batch, dyn.h(x_next_noise_batch), R_inv_batch) ## 这里以前写错了，写成了h(x_hat_batch)，应该是h(x_next_noise_batch)但在错误的情况下效果好像比正确时要好？
-            Q_batch = quad_value(x_next_noise_batch, x_next_hat_batch, P_next_hat_inv_batch, h_next_batch)
-            delta = Q_batch - target_Q_batch  ## 说实在的，现在我并没有深入理解这个算法的理论依据是什么
-            P_next_new_inv_batch = P_next_hat_inv_batch - args.lr_value * np.array([delta[index] * \
-                                    quad_value_T(x_next_noise_batch, x_next_hat_batch)[index] for index in range(size)]) ## 梯度下降不能保证Pnew正定-不正定就不做更新直接跳过
-            h_next_new_batch = h_next_batch - args.lr_value * delta
-            input_batch  = np.concatenate((x_hat_batch, y_next_batch, [P2o(P_hat_inv_batch[index], h_batch[index]) for index in range(size)]), axis=1).tolist() ## 这里以前写错了，写成了x_next_hat_batch，应该是x_hat_batch
-            output_batch = [P2o(P_next_new_inv_batch[index], h_next_new_batch[index]) for index in range(size)]
-            del_list = []
-            for n in range(size) : 
-                if output_batch[n] == [] : 
-                    del_list.append(n)
-            if del_list != [] :
-                input_batch  = [input_batch[index]  for index in range(n) if index not in del_list]
-                output_batch = [output_batch[index] for index in range(n) if index not in del_list]
-            bin = bin + input_batch
-            bot = bot + output_batch
+#         if size > 0 : 
+#             x_next_noise_batch = x_next_hat_batch + np.random.multivariate_normal(np.zeros((args.state_dim, )), args.explore_Cov, size) # 不同的t会得到相同的采样值吗？——不相同，但是能保证可重现
+#             target_Q_batch = args.gamma * quad_value(x_hat_batch, x_hat_new_batch, P_hat_inv_batch, h_batch) + \
+#                                 quad_value(x_next_noise_batch, dyn.f(x_hat_new_batch), Q_inv_batch) + \
+#                                 quad_value(y_next_batch, dyn.h(x_next_noise_batch), R_inv_batch) ## 这里以前写错了，写成了h(x_hat_batch)，应该是h(x_next_noise_batch)但在错误的情况下效果好像比正确时要好？
+#             Q_batch = quad_value(x_next_noise_batch, x_next_hat_batch, P_next_hat_inv_batch, h_next_batch)
+#             delta = Q_batch - target_Q_batch  ## 说实在的，现在我并没有深入理解这个算法的理论依据是什么
+#             P_next_new_inv_batch = P_next_hat_inv_batch - args.lr_value * np.array([delta[index] * \
+#                                     quad_value_T(x_next_noise_batch, x_next_hat_batch)[index] for index in range(size)]) ## 梯度下降不能保证Pnew正定-不正定就不做更新直接跳过
+#             h_next_new_batch = h_next_batch - args.lr_value * delta
+#             input_batch  = np.concatenate((x_hat_batch, y_next_batch, [P2o(P_hat_inv_batch[index], h_batch[index]) for index in range(size)]), axis=1).tolist() ## 这里以前写错了，写成了x_next_hat_batch，应该是x_hat_batch
+#             output_batch = [P2o(P_next_new_inv_batch[index], h_next_new_batch[index]) for index in range(size)]
+#             del_list = []
+#             for n in range(size) : 
+#                 if output_batch[n] == [] : 
+#                     del_list.append(n)
+#             if del_list != [] :
+#                 input_batch  = [input_batch[index]  for index in range(n) if index not in del_list]
+#                 output_batch = [output_batch[index] for index in range(n) if index not in del_list]
+#             bin = bin + input_batch
+#             bot = bot + output_batch
 
-        bin = torch.FloatTensor(bin)
-        bot = torch.FloatTensor(bot)
+#         bin = torch.FloatTensor(bin)
+#         bot = torch.FloatTensor(bot)
 
-        return bin, bot
+#         return bin, bot
 
 
 class RL_estimator : 
@@ -175,27 +176,27 @@ class RL_estimator :
         return P_next_inv, h_next
 
 
-def quad_value(state, state_pre, Pinv, h=None) : 
-    quad = lambda x1, x2, W, h : (x1 - x2) @ W @ (x1 - x2).T + h
+# def quad_value(state, state_pre, Pinv, h=None) : 
+#     quad = lambda x1, x2, W, h : (x1 - x2) @ W @ (x1 - x2).T + h
 
-    batch_size = state.shape[0]
-    if h is None : h = np.zeros((batch_size, ))
-    if batch_size == 1 : 
-        Q = quad(state, state_pre, Pinv, h)
-    elif batch_size >= 2 : 
-        Q = [quad(state[i], state_pre[i], Pinv[i], h[i]) for i in range(batch_size)]
-    return np.array(Q)
+#     batch_size = state.shape[0]
+#     if h is None : h = np.zeros((batch_size, ))
+#     if batch_size == 1 : 
+#         Q = quad(state, state_pre, Pinv, h)
+#     elif batch_size >= 2 : 
+#         Q = [quad(state[i], state_pre[i], Pinv[i], h[i]) for i in range(batch_size)]
+#     return np.array(Q)
 
-def quad_value_T(state, state_pre, h=None) : 
-    quad = lambda x1, x2, h : (x1 - x2).T @ (x1 - x2) + h
+# def quad_value_T(state, state_pre, h=None) : 
+#     quad = lambda x1, x2, h : (x1 - x2).T @ (x1 - x2) + h
 
-    batch_size = state.shape[0]
-    if h is None : h = np.zeros((batch_size, 2,2))
-    if batch_size == 1 : 
-        Q = quad(state, state_pre, h)
-    elif batch_size >= 2 : 
-        Q = [quad(np.tile(state[i],(1,1)), np.tile(state_pre[i],(1,1)), h[i]) for i in range(batch_size)]
-    return np.array(Q)
+#     batch_size = state.shape[0]
+#     if h is None : h = np.zeros((batch_size, 2,2))
+#     if batch_size == 1 : 
+#         Q = quad(state, state_pre, h)
+#     elif batch_size >= 2 : 
+#         Q = [quad(np.tile(state[i],(1,1)), np.tile(state_pre[i],(1,1)), h[i]) for i in range(batch_size)]
+#     return np.array(Q)
 
 
 def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) : 
@@ -227,7 +228,7 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
             P_next_hat_inv, h_next = agent.get_Pinv(x_hat, y_next, P_hat_inv, h)
 
             # solve optimization problem, get x_next_hat
-            result = est.NLSF(x_hat, inv(P_hat_inv), y_next, args.Q, args.R)
+            result = est.NLSF(x_hat, inv(P_hat_inv), [y_next], args.Q, args.R)
             x_hat_new = result[ :ds]
             x_next_hat = result[ds: ]
 
@@ -302,13 +303,13 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
         agent = RL_estimator(ds, args.obs_dim, noise, hidden_layer=args.hidden_layer, STATUS='test')
         model_path = os.path.join(args.output_dir, args.model_test)
         agent.policy.load_state_dict(torch.load(model_path))
-    if STATUS == 'UKF' : 
-        points = MerweScaledSigmaPoints(2, alpha=.3, beta=2., kappa=0.)
-        ukf = UnscentedKalmanFilter(dim_x=ds, dim_z=args.obs_dim, dt=.1, fx=dyn.f, hx=dyn.h, points=points)
-        ukf.x = args.x0_hat # initial state
-        ukf.P = args.P0_hat # initial uncertainty
-        ukf.R = args.R
-        ukf.Q = args.Q
+    # if STATUS == 'UKF' : 
+    #     points = MerweScaledSigmaPoints(2, alpha=.3, beta=2., kappa=0.)
+    #     ukf = UnscentedKalmanFilter(dim_x=ds, dim_z=args.obs_dim, dt=.1, fx=dyn.f, hx=dyn.h, points=points)
+    #     ukf.x = args.x0_hat # initial state
+    #     ukf.P = args.P0_hat # initial uncertainty
+    #     ukf.R = args.R
+    #     ukf.Q = args.Q
     if STATUS == 'PF' : 
         pf = est.Particle_Filter(ds, args.obs_dim, int(1e4), dyn.f, dyn.h, args.x0_mu, args.P0)
 
@@ -348,11 +349,11 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
                 # estimator Extended Kalman Filter
                 x_next_hat, P_next_hat = est.EKF(x_hat, P_hat, y_next, args.Q, args.R)
             elif STATUS == 'UKF' : 
-                # x_next_hat, P_next_hat = est.UKF(x_hat, P_hat, y_next, args.Q, args.R)
-                ukf.predict()
-                ukf.update(y_next)
-                x_next_hat = ukf.x
-                P_next_hat = ukf.P
+                x_next_hat, P_next_hat = est.UKF(x_hat, P_hat, y_next, args.Q, args.R)
+                # ukf.predict()
+                # ukf.update(y_next)
+                # x_next_hat = ukf.x
+                # P_next_hat = ukf.P
             elif STATUS == 'PF' : 
                 pf.predict(args.Q)
                 pf.update(y_next, args.R)
@@ -364,22 +365,21 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
                 P_next_hat = inv(P_inv_next)
             elif STATUS == 'NLS-EKF' : 
                 # estimator Nonlinear Least Square-Extended Kalman Filter
-                result = est.NLSF(x_hat, P_hat, y_next, args.Q, args.R)
-                # result1 = est.OPTF(x_hat, P_hat, y_next, args.Q, args.R)
+                result = est.NLSF(x_hat, P_hat, [y_next], args.Q, args.R)
                 x_hat = result[ :ds]
                 x_next_hat = result[ds: ]
                 _, P_next_hat = est.EKF(x_hat, P_hat, y_next, args.Q, args.R)
             elif STATUS == 'NLS-UKF' : 
-                result = est.NLSF(x_hat, P_hat, y_next, args.Q, args.R)
+                result = est.NLSF(x_hat, P_hat, [y_next], args.Q, args.R)
                 x_hat = result[ :ds]
                 x_next_hat = result[ds: ]
                 _, P_next_hat = est.UKF(x_hat, P_hat, y_next, args.Q, args.R)
-                ukf.predict()
-                ukf.update(y_next)
-                P_next_hat = ukf.P
+                # ukf.predict()
+                # ukf.update(y_next)
+                # P_next_hat = ukf.P
             elif STATUS == 'NLS-RLF' : 
                 # estimator Nonlinear Least Square-Reinforcement Learning Filter
-                result = est.NLSF(x_hat, P_hat, y_next, args.Q, args.R)
+                result = est.NLSF(x_hat, P_hat, [y_next], args.Q, args.R)
                 x_hat = result[ :ds]
                 x_next_hat = result[ds: ]
                 P_inv_next, h_next = agent.get_Pinv(x_hat, y_next, inv(P_hat), h)
