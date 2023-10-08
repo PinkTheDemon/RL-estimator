@@ -13,56 +13,10 @@ from filterpy.kalman import MerweScaledSigmaPoints,UnscentedKalmanFilter
 
 import dynamics as dyn
 import estimator as est
+from OUnoise import OUnoise
+from actor import * # 包括torch等
+from functions import * # 包括np
 
-class OUnoise : # DDPG算法中常用OUnoise，而不是Gaussian noise，在这个问题中是否有影响？——在目前的算法中，并不需要用到OUnoise，反而高斯噪声更合适
-    def __init__(self, state_dim, theta=0.15, mu=None, sigma=0.2, dt=1e-2, x0=None, rand_num=111) -> None:
-        self.output_dim = int(state_dim*(state_dim+1)/2 + 1)
-        self.theta = theta
-        self.mu = mu if mu is not None else np.zeros(self.output_dim)
-        self.sigma = sigma
-        self.dt = dt
-        self.x0 = x0
-        np.random.seed(rand_num)
-        self.reset()
-
-    def reset(self) : 
-        self.x_prev = self.x0 if self.x0 is not None else np.zeros_like(self.mu)
-
-    def noise(self) : 
-        x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + \
-            self.sigma * np.sqrt(self.dt) * np.random.normal(size=self.mu.shape)
-        self.x_prev = x
-        return x
-
-
-class Actor(nn.Module) : 
-    def __init__(self, state_dim, obs_dim, h=[200]) -> None : 
-        super(Actor, self).__init__()
-
-        self.input_dim = state_dim + obs_dim
-        self.output_dim = int(state_dim*(state_dim+1)/2 + 1)
-
-        self.fc = nn.ModuleList()
-        input_size = self.input_dim+self.output_dim-1
-        for hidden_size in h : 
-            self.fc.append(nn.Linear(input_size, hidden_size))
-            input_size = hidden_size
-        self.fc.append(nn.Linear(h[-1], self.output_dim))
-
-    def forward(self, input) : 
-        input = torch.tensor(input, dtype=torch.float32)
-        output = self.fc[0](input)
-        for fc in self.fc[1:] : 
-            output = fc(F.relu(output))
-        return output
-
-    def update_weight(self, bin, bot, lr=1e-3) : 
-        output_batch = self.forward(bin)
-        loss = F.mse_loss(output_batch, bot)
-        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
 
 class ReplayBuffer : 
     def __init__(self, maxsize:int) -> None:
@@ -81,13 +35,13 @@ class ReplayBuffer :
         self.input_init = list()
         self.output_init = list()
 
-    def push_init(self, state_pre, obs, P_inv, Pinv_next, h_next) : # 初始样本人为确保正确性，就不判断正定了
-        output_last = P2o(P_inv)
-        input = np.hstack((state_pre, obs, output_last))
-        output = P2o(Pinv_next, h_next)
-        self.input_init.append(input)
-        self.output_init.append(output)
-        self.size_init += 1
+    # def push_init(self, state_pre, obs, P_inv, h, Pinv_next, h_next) : # 初始样本人为确保正确性，就不判断正定了
+    #     output_last = P2o(P_inv, h)
+    #     input = np.hstack((state_pre, obs, output_last))
+    #     output = P2o(Pinv_next, h_next)
+    #     self.input_init.append(input)
+    #     self.output_init.append(output)
+    #     self.size_init += 1
 
     def push(self, x_hat, x_hat_new, x_next_hat, y_next, P_hat_inv, P_next_hat_inv, h, h_next) : 
         try : 
@@ -152,8 +106,8 @@ class ReplayBuffer :
         P_next_hat_inv_batch = np.array(P_next_hat_inv_batch)
         h_batch              = np.array(h_batch)
         h_next_batch         = np.array(h_next_batch)
-        Q_inv_batch          = np.tile(est.inv(args.Q), (size, 1, 1))
-        R_inv_batch          = np.tile(est.inv(args.R), (size, 1, 1))
+        Q_inv_batch          = np.tile(inv(args.Q), (size, 1, 1))
+        R_inv_batch          = np.tile(inv(args.R), (size, 1, 1))
 
         if size > 0 : 
             x_next_noise_batch = x_next_hat_batch + np.random.multivariate_normal(np.zeros((args.state_dim, )), args.explore_Cov, size) # 不同的t会得到相同的采样值吗？——不相同，但是能保证可重现
@@ -165,7 +119,7 @@ class ReplayBuffer :
             P_next_new_inv_batch = P_next_hat_inv_batch - args.lr_value * np.array([delta[index] * \
                                     quad_value_T(x_next_noise_batch, x_next_hat_batch)[index] for index in range(size)]) ## 梯度下降不能保证Pnew正定-不正定就不做更新直接跳过
             h_next_new_batch = h_next_batch - args.lr_value * delta
-            input_batch  = np.concatenate((x_hat_batch, y_next_batch, [P2o(P_hat_inv_batch[index]) for index in range(size)]), axis=1).tolist() ## 这里以前写错了，写成了x_next_hat_batch，应该是x_hat_batch
+            input_batch  = np.concatenate((x_hat_batch, y_next_batch, [P2o(P_hat_inv_batch[index], h_batch[index]) for index in range(size)]), axis=1).tolist() ## 这里以前写错了，写成了x_next_hat_batch，应该是x_hat_batch
             output_batch = [P2o(P_next_new_inv_batch[index], h_next_new_batch[index]) for index in range(size)]
             del_list = []
             for n in range(size) : 
@@ -177,56 +131,48 @@ class ReplayBuffer :
             bin = bin + input_batch
             bot = bot + output_batch
 
-
         bin = torch.FloatTensor(bin)
         bot = torch.FloatTensor(bot)
 
         return bin, bot
 
 
-# Pinv(n,n) to L(n,n) to output(1,n*(n+1)/2)
-def P2o(P, h=None) : 
-    # check if Pinv_next is semi-definit
-    try : 
-        L = np.linalg.cholesky(P)
-    except np.linalg.LinAlgError : # 矩阵非正定
-        print('new P matrix is not positive definite')
-        return []
-
-    out = []
-    for i in range(L.shape[0]) : 
-        out.extend(L[i, :i+1])
-    out = np.array(out).flatten()
-    if h is not None : out = np.append(out, h)
-    return out
-
-
 class RL_estimator : 
-    def __init__(self, state_dim, obs_dim, noise:OUnoise, hidden_layer=[200,200,200,200,200,200,200,200,200,200,200],
+    def __init__(self, state_dim, obs_dim, noise:OUnoise, hidden_layer=[200],
                  rand_num=111, STATUS='train') -> None:
-        self.state_dim = state_dim
-        torch.manual_seed(rand_num)
-        self.policy = Actor(state_dim, obs_dim, h=hidden_layer)
+        self.dim_output = ds2do(state_dim)
+        self.dim_input = state_dim + obs_dim + self.dim_output
+        self.policy = Actor(self.dim_input, self.dim_output, h=hidden_layer, rand_num=rand_num)
         self.OUnoise = noise
         self.STATUS = STATUS
 
-    def get_Pinv(self, state_pre, obs, Pinv_now) : 
+    def value(state, state_pre, Pinv, h=None, Transpose=False) : 
+        if Transpose : 
+            quad = lambda x1, x2, W : (x1 - x2).T @ W @ (x1 - x2)
+        else : 
+            quad = lambda x1, x2, W : (x1 - x2) @ W @ (x1 - x2).T
+
+        batch_size = state.shape[0]
+        Q = [quad(state[i], state_pre[i], Pinv[i]) for i in range(batch_size)]
+        Q = np.array(Q)
+        if h is not None : Q += h
+        return Q
+
+    def get_Pinv(self, state_pre, obs, Pinv_now, h) : 
         noise = self.OUnoise.noise()
         noise = (self.STATUS=='train')*noise
-        output_last = P2o(Pinv_now)
+        output_last = P2o(Pinv_now, h)
         input = np.hstack((state_pre, obs, output_last))
-        output = self.policy(input).detach().numpy() + noise
-        L = np.zeros((self.state_dim, self.state_dim))
-        for i in range(self.state_dim) : 
+        output = self.policy(input).detach().numpy() # + noise
+        ds = do2ds(output.size)
+        L = np.zeros((ds, ds))
+        for i in range(ds) : 
             L[i][ :i+1] = np.copy(output[ :i+1])
             output = output[i+1: ]
         P_next_inv = L @ L.T
         h_next = output[-1]
 
         return P_next_inv, h_next
-
-    def reset_noise(self, noise:OUnoise) : 
-        self.noise = noise
 
 
 def quad_value(state, state_pre, Pinv, h=None) : 
@@ -255,128 +201,136 @@ def quad_value_T(state, state_pre, h=None) :
 def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) : 
     sys.stdout = open(args.output_file, 'w')
 
-    MSE_min = np.zeros((2))
+    ds = args.state_dim
+    MSE_min = np.zeros((ds))
     num_noupdate = 0
     for i in range(args.max_episodes) : 
-        # noise = OUnoise(args.state_dim, rand_num=i)
-        # agent.reset_noise(noise) ## 是否需要每次都基于当前最好的模型来训练，但是当前最好的模型也有可能只是在当前这一集上表现好。评价好坏可能需要与EKF的MSE作对比。
+        # noise = OUnoise(ds, rand_num=i)
+        # agent.reset_noise(noise) ## 是否需要每次都基于当前最好的模型来训练，但是当前最好的模型也有可能只是在当前这一集上表现好。
 
         x, w_list, v_list = dyn.reset(sim_num=i, maxstep=args.max_train_steps, x0_mu=args.x0_mu, P0=args.P0, disturb_Q=args.Q, noise_R=args.R)
-        x_hat = args.x0_hat
-        x_hat_EKF = args.x0_hat
+        np.random.seed(i)
+        x_hat = np.random.multivariate_normal(args.x0_hat, args.P0_hat)
+        x_hat_EKF = x_hat
         P_hat_EKF = args.P0_hat
-        P_hat_inv = est.inv(args.P0_hat)
+        P_hat_inv = inv(args.P0_hat)
         h = 0
-        MSE = np.zeros((args.state_dim, ))
-        MSE_EKF = np.zeros((args.state_dim, ))
+        MSE = np.zeros((ds, ))
         for t in range(args.max_train_steps) : 
             # dynamic, x is unobservable, y is observable
             if args.MODEL_MISMATCH == False : 
-                x_next,y_next = dyn.step(x,w_list[t],v_list[t])
+                x_next, y_next = dyn.step(x, w_list[t], v_list[t])
             else : 
-                x_next = real_fx(x, w_list[t])
-                y_next = real_hx(x_next, v_list[t])
+                x_next, y_next = dyn.step_real(x, w_list[t], v_list[t])
 
             # get covarience matrix P 
-            P_next_hat_inv, h_next = agent.get_Pinv(x_hat, y_next, P_hat_inv)
+            P_next_hat_inv, h_next = agent.get_Pinv(x_hat, y_next, P_hat_inv, h)
 
             # solve optimization problem, get x_next_hat
-            result = est.NLSF(x_hat, est.inv(P_hat_inv), y_next, args.Q, args.R)
-            # result = est.OPTF(x_pre, est.inv(P_pre_inv), y, args.Q, args.R)
-            x_hat_new = result[ :args.state_dim]
-            x_next_hat = result[args.state_dim: ]
-            # EKF for comparison
-            x_next_hat_EKF, P_next_hat_EKF = est.EKF(x_hat_EKF, P_hat_EKF, y_next, args.Q, args.R)
+            result = est.NLSF(x_hat, inv(P_hat_inv), y_next, args.Q, args.R)
+            x_hat_new = result[ :ds]
+            x_next_hat = result[ds: ]
 
             # push experience into replay buffer
-            replay_buffer.push(x_hat, x_hat_new, x_next_hat, y_next, P_hat_inv, P_next_hat_inv, h, h_next)
+            replay_buffer.push(zip(x_hat, x_hat_new, x_next_hat, y_next, P_hat_inv, P_next_hat_inv, h, h_next), None)
 
-            # training ## 如果要把随机探索放到回放训练里面，那么就是采样之后再做这个新P和新h的计算
+            # training ## 采样之后再做新P和新h的计算
             if replay_buffer.size > args.warmup_size : 
-                input_batch, output_batch = replay_buffer.sample(args.batch_size, args)
-                agent.policy.update_weight(input_batch, output_batch, lr=args.lr_policy)
+                in_list, ot_list, is_init = replay_buffer.sample(args.batch_size)
+                bin = [input for input,judge in zip(in_list,is_init) if judge]
+                bot = [output for output,judge in zip(ot_list,is_init) if judge]
+                size = is_init.count(True)
+                if size > 0 : 
+                    x_hat_batch, x_hat_new_batch, x_next_hat_batch, y_next_batch, P_hat_inv_batch, P_next_hat_inv_batch, h_batch, h_next_batch = \
+                        zip(*[input for input,judge in zip(in_list,is_init) if not judge])
+                    Q_inv_batch = np.tile(inv(args.Q), (size, 1, 1))
+                    R_inv_batch = np.tile(inv(args.R), (size, 1, 1))
+                    x_next_noise_batch = x_next_hat_batch + np.random.multivariate_normal(np.zeros((args.state_dim, )), args.explore_Cov, size)
+                    target_Q_batch = args.gamma * agent.value(x_hat_batch, x_hat_new_batch, P_hat_inv_batch, h_batch) + \
+                                     agent.value(x_next_noise_batch, dyn.f(x_hat_new_batch), Q_inv_batch) + \
+                                     agent.value(y_next_batch, dyn.h(x_next_noise_batch), R_inv_batch) ## 这里以前写错了，写成了h(x_hat_batch)，应该是h(x_next_noise_batch)
+                    Q_batch = agent.value(x_next_noise_batch, x_next_hat_batch, P_next_hat_inv_batch, h_next_batch)
+                    delta = Q_batch - target_Q_batch
+                    P_next_new_inv_batch = P_next_hat_inv_batch - args.lr_value * np.array([delta[index] * \
+                                            agent.value(x_next_noise_batch, x_next_hat_batch, np.ones(size,1), Transpose=True)[index] for index in range(size)])
+                    h_next_new_batch = h_next_batch - args.lr_value * delta
+                    input_batch = np.concatenate(x_hat_batch, y_next_batch, [P2o(P_hat_inv_batch[index], h_batch[index]) for index in range(size)], axis=1).tolist()
+                    output_batch = [P2o(P_next_new_inv_batch[index], h_next_new_batch[index]) for index in range(size)]
+                    del_list = []
+                    for n in range(size) : 
+                        if output_batch[n] is None : 
+                            del_list.append(n)
+                    if del_list != [] :
+                        input_batch  = [input_batch[index]  for index in range(n) if index not in del_list]
+                        output_batch = [output_batch[index] for index in range(n) if index not in del_list]
+                bin += input_batch
+                bot += output_batch
+                agent.policy.update_weight(bin, bot, args.device, lr=args.lr_policy)
 
             # error evaluate, MSE
             MSE += (x - x_hat)**2 / args.max_train_steps
-            MSE_EKF += (x - x_hat_EKF)**2 / args.max_train_steps
-            MSE_ratio = MSE / MSE_EKF
         
             x = x_next
-            x_hat_EKF = x_next_hat_EKF
-            P_hat_EKF = P_next_hat_EKF
             x_hat = x_next_hat
             P_hat_inv = P_next_hat_inv
             h = h_next
 
         print(i, ': MSE = ', MSE, '\n')
         num_noupdate += 1
-        if (MSE_ratio <= MSE_min).all() or i == 0 : 
-            MSE_min = MSE_ratio
+        if (MSE < MSE_min).any() or i == 0 : 
+            if i == 0 : MSE_min = MSE 
+            else : MSE_min[MSE < MSE_min] = MSE[MSE < MSE_min]
             save_path = os.path.join(args.output_dir, args.model_file)
             torch.save(agent.policy.state_dict(), save_path)
             num_noupdate = 0
-        elif num_noupdate > 50 and (args.lr_policy/2) > args.lr_policy_min : 
+        elif num_noupdate >= 50 and (args.lr_policy/2) >= args.lr_policy_min : 
             args.lr_policy /= 2
             print("lr_policy update")
             num_noupdate = 0
         sys.stdout.flush()
+
     save_path = os.path.join(args.output_dir, args.modelend_file)
     torch.save(agent.policy.state_dict(), save_path)
     sys.stdout.close()
     sys.stdout = sys.__stdout__
 
 
-def real_fx(x, disturb=[], time_sample=.1) : 
-    x = x.T
-    x_next = np.copy(x)
-    x_next[0] = 1.1*x[1] + 0.25*x[1]
-    x_next[1] = -0.15*x[0] + 0.55*x[1]/(1+x[1]**2)
-    x = x_next
-    if len(disturb) == 0 : disturb = np.zeros_like(x)
-    x = x + disturb
-    return x
-
-def real_hx(x, noise=[]) : 
-    x = x.T
-    y = x[0] - 3*x[1]
-    if len(noise) == 0 : noise = np.zeros_like(y)
-    y = y + noise
-    return y
-
-
 def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') : 
+    ds = args.state_dim
     if STATUS == 'NLS-RLF' or STATUS == 'RLF' : 
-        noise = OUnoise(state_dim=args.state_dim, rand_num=rand_num)
-        agent = RL_estimator(args.state_dim, args.obs_dim, noise, hidden_layer=args.hidden_layer, STATUS='test')
-        model_path = os.path.join(args.output_dir, args.model_file)
+        noise = OUnoise(state_dim=ds, rand_num=rand_num)
+        agent = RL_estimator(ds, args.obs_dim, noise, hidden_layer=args.hidden_layer, STATUS='test')
+        model_path = os.path.join(args.output_dir, args.model_test)
         agent.policy.load_state_dict(torch.load(model_path))
-    # if STATUS == 'UKF' : 
-        # points = MerweScaledSigmaPoints(2, alpha=1., beta=2., kappa=0.)
-        # ukf = UnscentedKalmanFilter(dim_x=args.state_dim, dim_z=args.obs_dim, dt=.1, fx=fx, hx=hx, points=points)
-        # ukf.x = args.x0_hat # initial state
-        # ukf.P = args.P0_hat # initial uncertainty
-        # ukf.R = args.R
-        # ukf.Q = args.Q
+    if STATUS == 'UKF' : 
+        points = MerweScaledSigmaPoints(2, alpha=.3, beta=2., kappa=0.)
+        ukf = UnscentedKalmanFilter(dim_x=ds, dim_z=args.obs_dim, dt=.1, fx=dyn.f, hx=dyn.h, points=points)
+        ukf.x = args.x0_hat # initial state
+        ukf.P = args.P0_hat # initial uncertainty
+        ukf.R = args.R
+        ukf.Q = args.Q
     if STATUS == 'PF' : 
-        pf = est.Particle_Filter(args.state_dim, args.obs_dim, int(1e4), dyn.f, dyn.h, args.x0_mu, args.P0)
+        pf = est.Particle_Filter(ds, args.obs_dim, int(1e4), dyn.f, dyn.h, args.x0_mu, args.P0)
 
     # initial set for criterion
-    error = np.zeros((args.max_sim_steps,args.state_dim))
+    error = np.zeros((args.max_sim_steps,ds))
     MSE = 0
     execution_time = 0
     for i in range(sim_num) : 
         # set random seed
-        np.random.seed(rand_num+i)
+        # np.random.seed(rand_num+i) # 这个不要可能也能得到相同的结果，但肯定不能在之前已经跑过的代码上试
         # generate disturbance and noise
         x0, w_list, v_list = dyn.reset(rand_num+i, args.max_sim_steps, x0_mu=args.x0_mu, P0=args.P0, disturb_Q=args.Q, noise_R=args.R)
         # initial set for each simulation
-        x_seq = np.zeros((args.max_sim_steps,args.state_dim))
-        x_hat_seq = np.zeros((args.max_sim_steps,args.state_dim))
+        x_seq = np.zeros((args.max_sim_steps,ds))
+        x_hat_seq = np.zeros((args.max_sim_steps,ds))
         y_seq = np.zeros((args.max_sim_steps,args.obs_dim))
         P_seq = [np.zeros_like(args.P0_hat) for _ in range(args.max_sim_steps)]
         x = x0
         x_hat = args.x0_hat
         P_hat = args.P0_hat
+        y_next_list = []
+        h = 0
         t_seq = range(args.max_sim_steps)
         # main circle
         for t in t_seq : 
@@ -384,8 +338,7 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
             if args.MODEL_MISMATCH == False : 
                 x_next,y_next = dyn.step(x,w_list[t],v_list[t])
             else : 
-                x_next = real_fx(x, w_list[t])
-                y_next = real_hx(x_next, v_list[t])
+                x_next, y_next = dyn.step_real(x, w_list[t], v_list[t])
 
             # time record 
             start_time = time.process_time()
@@ -395,38 +348,48 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
                 # estimator Extended Kalman Filter
                 x_next_hat, P_next_hat = est.EKF(x_hat, P_hat, y_next, args.Q, args.R)
             elif STATUS == 'UKF' : 
-                x_next_hat, P_next_hat = est.UKF(x_hat, P_hat, y_next, args.Q, args.R)
-                # ukf.predict()
-                # ukf.update(y_next)
-                # x_next_hat = ukf.x
-                # P_next_hat = ukf.P
+                # x_next_hat, P_next_hat = est.UKF(x_hat, P_hat, y_next, args.Q, args.R)
+                ukf.predict()
+                ukf.update(y_next)
+                x_next_hat = ukf.x
+                P_next_hat = ukf.P
             elif STATUS == 'PF' : 
                 pf.predict(args.Q)
                 pf.update(y_next, args.R)
                 x_next_hat, P_next_hat = pf.estimate()
             elif STATUS == 'RLF' : 
                 x_next_hat, _ = est.EKF(x_hat, P_hat, y_next, args.Q, args.R)
-                P_inv_next, _ = agent.get_Pinv(x_hat, y_next, est.inv(P_hat))
-                P_next_hat = est.inv(P_inv_next)
+                P_inv_next, h_next = agent.get_Pinv(x_hat, y_next, inv(P_hat), h)
+                h = h_next
+                P_next_hat = inv(P_inv_next)
             elif STATUS == 'NLS-EKF' : 
                 # estimator Nonlinear Least Square-Extended Kalman Filter
                 result = est.NLSF(x_hat, P_hat, y_next, args.Q, args.R)
                 # result1 = est.OPTF(x_hat, P_hat, y_next, args.Q, args.R)
-                x_hat = result[ :2]
-                x_next_hat = result[2: ]
+                x_hat = result[ :ds]
+                x_next_hat = result[ds: ]
                 _, P_next_hat = est.EKF(x_hat, P_hat, y_next, args.Q, args.R)
             elif STATUS == 'NLS-UKF' : 
                 result = est.NLSF(x_hat, P_hat, y_next, args.Q, args.R)
-                x_hat = result[ :2]
-                x_next_hat = result[2: ]
+                x_hat = result[ :ds]
+                x_next_hat = result[ds: ]
                 _, P_next_hat = est.UKF(x_hat, P_hat, y_next, args.Q, args.R)
+                ukf.predict()
+                ukf.update(y_next)
+                P_next_hat = ukf.P
             elif STATUS == 'NLS-RLF' : 
                 # estimator Nonlinear Least Square-Reinforcement Learning Filter
                 result = est.NLSF(x_hat, P_hat, y_next, args.Q, args.R)
-                x_hat = result[ :2]
-                x_next_hat = result[2: ]
-                P_inv_next, _ = agent.get_Pinv(x_hat, y_next, est.inv(P_hat))
-                P_next_hat = est.inv(P_inv_next)
+                x_hat = result[ :ds]
+                x_next_hat = result[ds: ]
+                P_inv_next, h_next = agent.get_Pinv(x_hat, y_next, inv(P_hat), h)
+                P_next_hat = inv(P_inv_next)
+                h = h_next
+            elif STATUS == 'FULL' : 
+                y_next_list.append(y_next)
+                result = est.NLSF(args.x0_hat, args.P0_hat, y_next_list, args.Q, args.R)
+                x_next_hat = result[-ds: ]
+                P_next_hat = args.P0_hat
 
             # time evaluate, ms
             end_time = time.process_time()
@@ -452,85 +415,31 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
         print(f"lr_policy : {args.lr_policy}")
 
         # plot
-        fig, axs = plt.subplots(2,1)
-        axs[0].plot(t_seq, x_seq[:,0], label='x_real', color='blue')
-        axs[0].plot(t_seq, x_hat_seq[:,0], label='x_hat', color='red')
-        axs[0].set_xlim(0, args.max_sim_steps)
-        axs[0].set_ylabel('x1')
+        plt.rcParams['font.sans-serif'] = ['SimHei']
+        plt.rcParams['axes.unicode_minus'] = False 
+        # plt.rcParams['font.size'] = 28
+        fig, axs = plt.subplots(ds,1)
+        for i in range(ds) : 
+            axs[i].plot(t_seq, x_seq[:,i], label='x_real', color='blue')
+            axs[i].plot(t_seq, x_hat_seq[:,i], label='x_hat', color='red')
+            axs[i].set_xlim(0, args.max_sim_steps)
+            axs[i].set_ylabel(f'x{i+1}')
         axs[0].set_title(f'{STATUS}')
+        # axs[0].set_title('状态估计效果图')
         axs[0].legend()
-        axs[1].plot(t_seq, x_seq[:,1], color='blue')
-        axs[1].plot(t_seq, x_hat_seq[:,1], color='red')
-        axs[1].set_xlim(0, args.max_sim_steps)
-        axs[1].set_xlabel('step')
-        axs[1].set_ylabel('x2')
+        axs[-1].set_xlabel('时间步')
 
         fig, ax = plt.subplots()
-        ax.plot(t_seq, error[:,0], label='x1', color='blue')
-        ax.plot(t_seq, error[:,1], label='x2', color='red')
+        color = ['b','g','r','c','m','y','k']
+        for i in range(ds) : 
+            ax.plot(t_seq, error[:,i], label=f'x{i+1}', color=color[i], linestyle='--')
+            ax.plot(t_seq, np.average(error[:,i])*np.ones_like(t_seq), color=color[i])
         ax.set_xlim(0, args.max_sim_steps)
-        ax.set_xlabel('step')
-        ax.set_ylabel('error')
+        ax.set_xlabel('时间步')
+        ax.set_ylabel('绝对值误差')
         ax.set_title(f'MSE = {MSE}')
+        # ax.set_title('绝对值误差')
         ax.legend()
         plt.show()
 
     return x_hat_seq, y_seq, P_seq
-
-def main() : 
-    parser = argparse.ArgumentParser()
-    # system parameters
-    parser.add_argument("--state_dim", default=2, type=int, help="dimension of state variable x")
-    parser.add_argument("--obs_dim", default=1, type=int, help="dimension of measurement y")
-    parser.add_argument("--x0_mu", default=np.array([0, 0]), help="average of initial state distribution")
-    parser.add_argument("--P0", default=np.array([[1., 0],[0, 1.]]), help="covariance of initial state distribution")
-    parser.add_argument("--x0_hat", default=np.array([0, 0]), help="estimation of initial state distribution average")
-    parser.add_argument("--P0_hat", default=np.array([[1., 0],[0, 1.]]), help="estimation of initial state distribution covariance")
-    parser.add_argument("--Q", default=np.array([[.01, 0],[0, 1.]]), help="covariance of process disturbance")
-    parser.add_argument("--R", default=np.array([[1e-2]]), help="covariance of measurement noise")
-    parser.add_argument("--MODEL_MISMATCH", default=False, type=bool, help="choose whether to apply model mismatch")
-
-    # training parameters
-    parser.add_argument("--max_episodes", default=5000, type=int, help="max train episodes")
-    parser.add_argument("--max_train_steps", default=200, type=int, help="max simulation steps")
-    parser.add_argument("--max_sim_steps", default=1000, type=int, help="max simulation steps")
-    parser.add_argument("--buffer_size", default=1e4, type=int, help="max size of replay buffer")
-    parser.add_argument("--batch_size", default=16, type=int, help="number of samples for batch update")
-    parser.add_argument("--warmup_size", default=200, type=int, help="decide when to start the training of the NN")
-    parser.add_argument("--hidden_layer", default=[200,200,200,200,200,200,200,200,200,200,200,200,200,200], help="FC layers of NN")
-    parser.add_argument("--gamma", default=.9, type=float, help="discount factor in value function")
-    parser.add_argument("--lr_value", default=1.e-3, type=float, help="learning rate of value function")
-    parser.add_argument("--lr_policy", default=1e-2, type=float, help="learning rate of policy net")
-    parser.add_argument("--lr_policy_delta", default=5e-4, type=float, help="learning rate reduction every time")
-    parser.add_argument("--lr_policy_min", default=1e-6, type=float, help="learning rate of policy net")
-    parser.add_argument("--explore_Cov", default=np.array([[.001,0],[0,.001]]), help="the covariance of Guassian distribution added to predicted state")
-
-    # file path
-    parser.add_argument("--output_dir", default="output", type=str, help="path for files to save outputs such as model")
-    parser.add_argument("--output_file", default="output/log.txt", type=str, help="file to save training messages")
-    parser.add_argument("--model_file", default="model.bin", type=str, help="trained model")
-    parser.add_argument("--modelend_file", default="modelend.bin", type=str, help="trained model")
-
-    args = parser.parse_args()
-
-    args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    noise = OUnoise(args.state_dim)
-    agent = RL_estimator(state_dim=args.state_dim, obs_dim=args.obs_dim, noise=noise, hidden_layer=args.hidden_layer, STATUS='test')
-    agent.policy.to(args.device)
-    # init policy network ## 可以尝试没有初始样本的——没有初始样本的目前看来不太行
-    x_hat_seq, y_seq, P_hat_seq = simulate(args, rand_num=22222, STATUS='init')
-    x_hat_seq = np.insert(x_hat_seq, 0, args.x0_hat, axis=0)
-    P_hat_seq = np.insert(P_hat_seq, 0, args.P0_hat, axis=0)
-    replay_buffer = ReplayBuffer(maxsize=args.buffer_size)
-    for t in range(args.max_train_steps) : 
-        replay_buffer.push_init(x_hat_seq[t], y_seq[t], est.inv(P_hat_seq[t]), est.inv(P_hat_seq[t+1]), 0)
-    input_batch, output_batch = replay_buffer.sample(args.max_train_steps, args)
-    agent.policy.update_weight(input_batch, output_batch, lr=1e-4)
-    # save_path = os.path.join(args.output_dir, "model.bin")
-    # torch.save(agent.policy.state_dict(), save_path)
-    train(args, agent, replay_buffer)
-
-    simulate(args, sim_num=50, rand_num=10086, STATUS='NLS-RLF')
-
-if __name__ == '__main__' : 
-    main()
