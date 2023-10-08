@@ -233,17 +233,42 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
             x_next_hat = result[ds: ]
 
             # push experience into replay buffer
-            replay_buffer.push(zip(x_hat, x_hat_new, x_next_hat, y_next, P_hat_inv, P_next_hat_inv, h, h_next), None)
+            replay_buffer.push(zip([x_hat], [x_hat_new], [x_next_hat], [y_next], [P_hat_inv], [P_next_hat_inv], [h], [h_next]), None)
 
             # training ## 采样之后再做新P和新h的计算
             if replay_buffer.size > args.warmup_size : 
                 in_list, ot_list, is_init = replay_buffer.sample(args.batch_size)
                 bin = [input for input,judge in zip(in_list,is_init) if judge]
                 bot = [output for output,judge in zip(ot_list,is_init) if judge]
-                size = is_init.count(True)
+                size = is_init.count(False)
                 if size > 0 : 
-                    x_hat_batch, x_hat_new_batch, x_next_hat_batch, y_next_batch, P_hat_inv_batch, P_next_hat_inv_batch, h_batch, h_next_batch = \
-                        zip(*[input for input,judge in zip(in_list,is_init) if not judge])
+                    x_hat_batch          = []
+                    x_hat_new_batch      = []
+                    x_next_hat_batch     = []
+                    y_next_batch         = []
+                    P_hat_inv_batch      = []
+                    P_next_hat_inv_batch = []
+                    h_batch              = []
+                    h_next_batch         = []
+                    for input,judge in zip(in_list,is_init) : 
+                        if not judge : 
+                            x_hat, x_hat_new, x_next_hat, y_next, P_hat_inv, P_next_hat_inv, h, h_next = zip(*input)
+                            x_hat_batch          += x_hat
+                            x_hat_new_batch      += x_hat_new
+                            x_next_hat_batch     += x_next_hat
+                            y_next_batch         += y_next
+                            P_hat_inv_batch      += P_hat_inv
+                            P_next_hat_inv_batch += P_next_hat_inv
+                            h_batch              += h
+                            h_next_batch         += h_next
+                    x_hat_batch          = np.array(x_hat_batch)
+                    x_hat_new_batch      = np.array(x_hat_new_batch)
+                    x_next_hat_batch     = np.array(x_next_hat_batch)
+                    y_next_batch         = np.array(y_next_batch)
+                    P_hat_inv_batch      = np.array(P_hat_inv_batch)
+                    P_next_hat_inv_batch = np.array(P_next_hat_inv_batch)
+                    h_batch              = np.array(h_batch)
+                    h_next_batch         = np.array(h_next_batch)
                     Q_inv_batch = np.tile(inv(args.Q), (size, 1, 1))
                     R_inv_batch = np.tile(inv(args.R), (size, 1, 1))
                     x_next_noise_batch = x_next_hat_batch + np.random.multivariate_normal(np.zeros((args.state_dim, )), args.explore_Cov, size)
