@@ -1,6 +1,5 @@
 import numpy as np
 
-from OUnoise import *
 
 def f(x, u=None, disturb=None, sample_time=0.01, batch_first:bool=True) : 
     if batch_first is True : x = x.T
@@ -58,6 +57,22 @@ def F(x, u=None, sample_time=0.01) :
     # ####################################################
     return F
 
+def f_real(x, u=None, disturb=None, sample_time=0.01, batch_first:bool=True) : 
+    if batch_first is True : x = x.T
+    # continuous form
+    xdot = np.zeros_like(x)
+    dt = 0.01
+    for _ in range(int(sample_time/dt)) : 
+        # dynamics 4 #####################################
+        xdot[0] = 10*(-x[0]+x[1])
+        xdot[1] = 28*x[0] - x[1] - x[0]*x[2]
+        xdot[2] = -8/3*x[2] + x[0]*x[1]
+        # ################################################
+        x = x + dt*xdot
+    if batch_first is True : x = x.T
+    if disturb is not None : x = x + disturb
+    return x
+
 def h(x, noise=None, batch_first:bool=True) : 
     if batch_first is True : x = x.T
     # measurement equation 1 #############################
@@ -67,7 +82,7 @@ def h(x, noise=None, batch_first:bool=True) :
     # y = x
     # ####################################################
     # measurement equation 4 #############################
-    y = np.array([np.linalg.norm(x), x[0]])
+    y = np.array([np.sqrt(x[0]**2+x[1]**2+x[2]**2), x[0]])
     # ####################################################
     if batch_first is True : y = y.T
     if noise is not None : y = y + noise
@@ -81,17 +96,31 @@ def H(x) :
     # H = np.array([[1,0],[0,1]])
     # ###################################################
     # jac 4 #############################################
-    y = np.linalg.norm(x)
+    y = h(x)
     H = np.array([[x[0]/y, x[1]/y, x[2]/y], [1,0,0]])
     # ###################################################
     return H
+
+def h_real(x, noise=None, batch_first:bool=True) : 
+    if batch_first is True : x = x.T
+    # measurement equation 4 #############################
+    y = np.array([np.linalg.norm(x), x[0]])
+    # ####################################################
+    if batch_first is True : y = y.T
+    if noise is not None : y = y + noise
+    return y
 
 # system dynamics
 def step(x, disturb=None, noise=None) : 
     x_next = f(x, disturb)
     y_next = h(x_next, noise)
-
     return x_next, y_next
+
+def step_real(x, disturb=None, noise=None) : 
+    x_next = f_real(x, disturb)
+    y_next = h_real(x_next, noise)
+    return x_next, y_next
+
 
 # generate noise list for ith simulation
 def reset(sim_num, maxstep, x0_mu, P0, disturb_Q, noise_R, 
