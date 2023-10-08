@@ -23,7 +23,8 @@ class Actor(nn.Module) :
         output = self.fc[0](input)
         for fc in self.fc[1:] : 
             output = fc(F.relu(output))
-        output[-1] = F.relu(output[-1])
+        # output = torch.clamp(output, min=-1e3, max=1e3) # 对输出进行限幅
+        output[-1] = F.relu(output[-1]) # 限定h为正
         return output
 
     def update_weight(self, bin, bot, lr=1e-3) : 
@@ -62,7 +63,7 @@ rand_num      随机数种子        int         >=0         神经网络随机�
 
 '''
 forward
-前向传播 使用时可以直接用方法对象的名字 当然加上.forward也行
+前向传播 使用时可以直接用类对象的名字 当然加上.forward也行
 --------------------------------------------------
 输入     含义        数据类型           取值范围    说明
 input    网络输入    tensor或ndarray    --          也可以是批量输入 size_batch*dim
