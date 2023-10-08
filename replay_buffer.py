@@ -32,15 +32,18 @@ class ReplayBuffer :
         indices = np.random.randint(self.size+self.size_init, size=n)
         in_list = []
         ot_list = []
+        is_init = []
         for i in indices : 
             if i < self.size : 
                 in_list.append(self.input[i])
                 ot_list.append(self.output[i])
+                is_init.append(False)
             else : 
                 in_list.append(self.input_init[i-self.size])
                 ot_list.append(self.output_init[i-self.size])
+                is_init.append(True)
 
-        return in_list, ot_list
+        return in_list, ot_list, is_init
 
 
 '''
@@ -75,7 +78,8 @@ sample
 输入    含义        数据类型    取值范围    说明
 n       采样数量    int         >0          无
 --------------------------------------------------
-输出       含义        数据类型    取值范围    说明
-in_list    输入列表    list        --          无
-ot_list    输出列表    list        --          无
+输出       含义                数据类型    取值范围    说明
+in_list    输入列表            list        --          无
+ot_list    输出列表            list        --          无
+is_init    是否来自初始样本    list        bool        位置与输入、输出列表对应
 '''
