@@ -44,7 +44,26 @@ class ReplayBuffer :
                 is_init.append(True)
 
         return in_list, ot_list, is_init
-
+    
+    def sample_seq(self, batch_size:int, num_steps:int) : 
+        indices = np.random.randint(self.size + self.size_init - num_steps, size=batch_size)
+        in_list = []
+        ot_list = []
+        is_init = []
+        for i in indices : 
+            if i < self.size - num_steps : 
+                in_list += [self.input[i:i+num_steps]]
+                ot_list += [self.output[i:i+num_steps]]
+                is_init += False
+            elif i < self.size : 
+                in_list += [self.input[i: ] + self.input[ :i+num_steps-self.size]]
+                ot_list += [self.output[i: ] + self.output[ : i+num_steps-self.size]]
+                is_init += False
+            else : 
+                in_list += [self.input_init[i-self.size:i-self.size+num_steps]]
+                ot_list += [self.output_init[i-self.size:i-self.size+num_steps]]
+                is_init += True
+        return in_list, ot_list, is_init
 
 '''
 参数       含义    数据类型    取值范围    说明
@@ -82,4 +101,18 @@ n       采样数量    int         >0          无
 in_list    输入列表            list        --          无
 ot_list    输出列表            list        --          无
 is_init    是否来自初始样本    list        bool        位置与输入、输出列表对应
+'''
+
+'''
+sample_seq
+采样序列样本 在现有样本和初始样本中均匀随机采样
+--------------------------------------------------
+输入          含义        数据类型    取值范围    说明
+batch_size    批量大小    int         >0          无
+num_steps     序列长度    int         >0          无
+--------------------------------------------------
+输出       含义                数据类型    取值范围    说明
+in_list    输入列表            list        --          长度为batch_size
+ot_list    输出列表            list        --          每个元素都是长度为num_steps的list
+is_init    是否来自初始样本    list        bool        长度为batch_size
 '''
