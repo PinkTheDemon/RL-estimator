@@ -7,70 +7,70 @@ class ReplayBuffer :
         self.size = 0
         self.size_init = 0
         self.count = 0
-        self.input = []
-        self.output = []
-        self.input_init = []
-        self.output_init = []
+        self.experience = []
+        self.information = []
+        self.experience_init = []
+        self.information_init = []
         np.random.seed(rand_num)
 
-    def push_init(self, input, output) : 
-        self.input_init.append(input)
-        self.output_init.append(output)
+    def push_init(self, exp, inf=None) : 
+        self.experience_init.append(exp)
+        self.information_init.append(inf)
         self.size_init += 1
 
-    def push(self, input, output) : 
+    def push(self, exp, inf=None) : 
         if self.size < self.maxsize : 
-            self.input.append(input)
-            self.output.append(output)
+            self.experience.append(exp)
+            self.information.append(inf)
             self.size += 1
         else : 
-            self.input[self.count] = input
-            self.output[self.count] = output
+            self.experience[self.count] = exp
+            self.information[self.count] = inf
             self.count += 1
             self.count = int(self.count % self.maxsize)
 
     def sample(self, n:int) : 
         indices = np.random.randint(self.size+self.size_init, size=n)
-        in_list = []
-        ot_list = []
+        exp_list = []
+        inf_list = []
         is_init = []
         for i in indices : 
             if i < self.size : 
-                in_list.append(self.input[i])
-                ot_list.append(self.output[i])
+                exp_list.append(self.experience[i])
+                inf_list.append(self.information[i])
                 is_init.append(False)
             else : 
-                in_list.append(self.input_init[i-self.size])
-                ot_list.append(self.output_init[i-self.size])
+                exp_list.append(self.experience_init[i-self.size])
+                inf_list.append(self.information_init[i-self.size])
                 is_init.append(True)
 
-        return in_list, ot_list, is_init
+        return exp_list, inf_list, is_init
     
     def sample_seq(self, batch_size:int, num_steps:int) : 
         indices = np.random.randint(self.size + self.size_init - num_steps, size=batch_size)
-        in_list = []
-        ot_list = []
+        exp_list = []
+        inf_list = []
         is_init = []
         for i in indices : 
             if i < self.size - num_steps : 
-                in_list += [self.input[i:i+num_steps]]
-                ot_list += [self.output[i:i+num_steps]]
+                exp_list += [self.experience[i:i+num_steps]]
+                inf_list += [self.information[i:i+num_steps]]
                 is_init.append(False)
             elif i < self.size : 
-                in_list += [self.input[i: ] + self.input[ :i+num_steps-self.size]]
-                ot_list += [self.output[i: ] + self.output[ : i+num_steps-self.size]]
+                exp_list += [self.experience[i: ] + self.experience[ :i+num_steps-self.size]]
+                inf_list += [self.information[i: ] + self.information[ : i+num_steps-self.size]]
                 is_init.append(False)
             else : 
-                in_list += [self.input_init[i-self.size:i-self.size+num_steps]]
-                ot_list += [self.output_init[i-self.size:i-self.size+num_steps]]
+                exp_list += [self.experience_init[i-self.size:i-self.size+num_steps]]
+                inf_list += [self.information_init[i-self.size:i-self.size+num_steps]]
                 is_init.append(True)
-        return in_list, ot_list, is_init
+        return exp_list, inf_list, is_init
 
 '''
-参数        含义          数据类型    取值范围    说明
----------   -----------   ---------   ---------   ----------
-maxsize     容量          int         >0          初始样本不算在容量中
-rand_num    随机数种子    int         >=0         种子相同的buffer 采样过程将会是一致的
+参数         含义          数据类型    取值范围    说明
+----------   -----------   ---------   ---------   ----------
+maxsize      容量          int         >0          初始样本不算在容量中
+#rand_num    随机数种子    int         >=0         默认值111 种子相同的buffer 采样过程将会是一致的
 '''
 
 '''
@@ -78,18 +78,18 @@ push_init
 放入初始化样本 初始化样本在经验回放过程中不会丢弃 请人为确保初始样本的正确性
 存入数量不限 也可以中途加入 但每次只存储一个样本 不支持list形式批量存储
 --------------------------------------------------
-输入      含义    数据类型    取值范围    说明
-input     输入    --          --          进来后将被放入list中存储 随意存入即可
-output    输出    --          --          同input
+输入    含义        数据类型    取值范围    说明
+exp     经验样本    --          --          进来后将被放入list中存储 随意存入即可
+#inf    其他信息    --          --          默认为None
 '''
 
 '''
 push
 存入样本 达到最大容量后再存入会丢弃最早的样本 存入的样本不会做任何修改 请人为确保样本的正确性
 --------------------------------------------------
-输入      含义    数据类型    取值范围    说明
-input     输入    --          --          进来后将被放入list中存储 随意存入即可
-output    输出    --          --          同input
+输入    含义        数据类型    取值范围    说明
+exp     经验样本    --          --          进来后将被放入list中存储 随意存入即可
+#inf    其他信息    --          --          默认为None
 '''
 
 '''
@@ -99,10 +99,10 @@ sample
 输入    含义        数据类型    取值范围    说明
 n       采样数量    int         >0          无
 --------------------------------------------------
-输出       含义                数据类型    取值范围    说明
-in_list    输入列表            list        --          无
-ot_list    输出列表            list        --          无
-is_init    是否来自初始样本    list        bool        位置与输入、输出列表对应
+输出        含义                数据类型    取值范围    说明
+exp_list    样本列表            list        --          无
+inf_list    信息列表            list        --          无
+is_init     是否来自初始样本    list        bool        位置与输入、输出列表对应
 '''
 
 '''
@@ -113,8 +113,8 @@ sample_seq
 batch_size    批量大小    int         >0          无
 num_steps     序列长度    int         >0          无
 --------------------------------------------------
-输出       含义                数据类型    取值范围    说明
-in_list    输入列表            list        --          长度为batch_size
-ot_list    输出列表            list        --          每个元素都是长度为num_steps的list
-is_init    是否来自初始样本    list        bool        长度为batch_size
+输出        含义                数据类型    取值范围    说明
+exp_list    样本列表            list        --          长度为batch_size
+inf_list    信息列表            list        --          每个元素都是长度为num_steps的list
+is_init     是否来自初始样本    list        bool        长度为batch_size
 '''

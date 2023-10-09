@@ -386,3 +386,9 @@ main函数：{
 2、修改系统动态，现在用的是11. Adaptive Gaussian sum filter for nonlinear Bayesian estimation里面的example2，Lorenz system，另外为了确定方向，增加了一个观测量y[1]=x[0]。
 
 3、NLSF的jac矩阵问题得到解决，问题在于系数矩阵做cholesky分解时，需要上三角矩阵，而之前用的是下三角格式。
+
+
+
+### 20231009 replay_buffer修改
+
+以前的属性是self.input和self.output，现在改成了self.experience和self.information，即把原来的input整合到了experience里，information可以存一些额外的信息。存入时，information默认为None。当然，以前的写法仍然可以沿用，但是意义不太对应就是了，关于以前对push_init和push的调用就放着之后再修改吧。
