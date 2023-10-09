@@ -2,7 +2,7 @@ import numpy as np
 
 
 class ReplayBuffer : 
-    def __init__(self, maxsize:int) -> None:
+    def __init__(self, maxsize:int, rand_num:int=111) -> None:
         self.maxsize = maxsize
         self.size = 0
         self.size_init = 0
@@ -11,6 +11,7 @@ class ReplayBuffer :
         self.output = []
         self.input_init = []
         self.output_init = []
+        np.random.seed(rand_num)
 
     def push_init(self, input, output) : 
         self.input_init.append(input)
@@ -54,21 +55,22 @@ class ReplayBuffer :
             if i < self.size - num_steps : 
                 in_list += [self.input[i:i+num_steps]]
                 ot_list += [self.output[i:i+num_steps]]
-                is_init += False
+                is_init.append(False)
             elif i < self.size : 
                 in_list += [self.input[i: ] + self.input[ :i+num_steps-self.size]]
                 ot_list += [self.output[i: ] + self.output[ : i+num_steps-self.size]]
-                is_init += False
+                is_init.append(False)
             else : 
                 in_list += [self.input_init[i-self.size:i-self.size+num_steps]]
                 ot_list += [self.output_init[i-self.size:i-self.size+num_steps]]
-                is_init += True
+                is_init.append(True)
         return in_list, ot_list, is_init
 
 '''
-参数       含义    数据类型    取值范围    说明
---------   -----   ---------   ---------   ----------
-maxsize    容量    int         >0          初始样本不算在容量中
+参数        含义          数据类型    取值范围    说明
+---------   -----------   ---------   ---------   ----------
+maxsize     容量          int         >0          初始样本不算在容量中
+rand_num    随机数种子    int         >=0         种子相同的buffer 采样过程将会是一致的
 '''
 
 '''
