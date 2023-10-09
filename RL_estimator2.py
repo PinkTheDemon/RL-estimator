@@ -1,11 +1,4 @@
-import numpy as np
-from torch import nn
-from torch.optim import Adam
-import torch.nn.functional as F
-import torch
-from collections import defaultdict, deque
 import matplotlib.pyplot as plt
-import argparse
 import os
 import sys
 import time
@@ -148,7 +141,7 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
                         output_batch = [output_batch[index] for index in range(n) if index not in del_list]
                 bin += input_batch
                 bot += output_batch
-                agent.policy.update_weight(bin, bot, args.device, lr=args.lr_policy)
+                agent.policy.update_weight(bin, bot, lr=args.lr_policy)
 
             # error evaluate, MSE
             MSE += (x - x_hat)**2 / args.max_train_steps
