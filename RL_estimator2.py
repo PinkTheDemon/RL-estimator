@@ -174,7 +174,7 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
 def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') : 
     ds = args.state_dim
     if STATUS == 'NLS-RLF' or STATUS == 'RLF' : 
-        noise = OUnoise(ds=ds, rand_num=rand_num)
+        noise = OUnoise(dim=ds, rand_num=rand_num)
         agent = RL_estimator(ds, args.obs_dim, noise, hidden_layer=args.hidden_layer, STATUS='test')
         model_path = os.path.join(args.output_dir, args.model_test)
         agent.policy.load_state_dict(torch.load(model_path))
