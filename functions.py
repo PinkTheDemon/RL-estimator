@@ -29,12 +29,15 @@ def block_diag(matrix_list) :
     return bd_M
 
 
-# inverse of matrix M
+# inverse of lower triangular matrix M
 def inv(M) : 
     if M.shape == (1,1) : 
         return 1/M 
     else :
-        return np.linalg.inv(M)
+        L = np.linalg.cholesky(M)
+        L_inv = np.linalg.inv(L)
+        M_inv = L_inv.T @ L_inv
+        return M_inv
 
 
 def delete_empty(M) : 
@@ -107,7 +110,7 @@ bd_M    块对角矩阵    ndarray     --          无
 
 '''
 inv
-矩阵求逆 由于np的函数不能求(1,1)矩阵的逆 因此做个整合
+矩阵求逆 由于np的函数不能求(1,1)矩阵的逆 因此做个整合 另外利用M的对称性 先做cholesky分解再对下三角求逆
 --------------------------------------------------
 输入    含义    数据类型    取值范围    说明
 M       矩阵    ndarray     --          非正定的异常不做处理 直接报错
