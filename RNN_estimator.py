@@ -3,7 +3,7 @@ import os
 import sys
 import argparse
 import time
-from filterpy.kalman import MerweScaledSigmaPoints,UnscentedKalmanFilter
+# from filterpy.kalman import MerweScaledSigmaPoints,UnscentedKalmanFilter
 
 import dynamics as dyn
 import estimator as est
@@ -143,13 +143,13 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
         agent = RL_estimator(ds, args.obs_dim, args.device, noise, hidden_layer=args.hidden_layer, STATUS='test')
         model_path = os.path.join(args.output_dir, args.model_test)
         agent.policy.load_state_dict(torch.load(model_path))
-    if STATUS == 'UKF' : 
-        points = MerweScaledSigmaPoints(ds, alpha=1., beta=2., kappa=0.)
-        ukf = UnscentedKalmanFilter(dim_x=ds, dim_z=args.obs_dim, dt=.01, fx=dyn.f, hx=dyn.h, points=points)
-        ukf.x = args.x0_hat # initial state
-        ukf.P = args.P0_hat # initial uncertainty
-        ukf.R = args.R
-        ukf.Q = args.Q
+    # if STATUS == 'UKF' : 
+    #     points = MerweScaledSigmaPoints(ds, alpha=1., beta=2., kappa=0.)
+    #     ukf = UnscentedKalmanFilter(dim_x=ds, dim_z=args.obs_dim, dt=.01, fx=dyn.f, hx=dyn.h, points=points)
+    #     ukf.x = args.x0_hat # initial state
+    #     ukf.P = args.P0_hat # initial uncertainty
+    #     ukf.R = args.R
+    #     ukf.Q = args.Q
     if STATUS == 'PF' : 
         pf = est.Particle_Filter(ds, args.obs_dim, int(1e4), dyn.f, dyn.h, args.x0_mu, args.P0)
 
@@ -190,11 +190,11 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
                 # estimator Extended Kalman Filter
                 x_next_hat, P_next_hat = est.EKF(x_hat, P_hat, y_next, args.Q, args.R)
             elif STATUS == 'UKF' : 
-                # x_next_hat, P_next_hat = est.UKF(x_hat, P_hat, y_next, args.Q, args.R)
-                ukf.predict()
-                ukf.update(y_next)
-                x_next_hat = ukf.x
-                P_next_hat = ukf.P
+                x_next_hat, P_next_hat = est.UKF(x_hat, P_hat, y_next, args.Q, args.R)
+                # ukf.predict()
+                # ukf.update(y_next)
+                # x_next_hat = ukf.x
+                # P_next_hat = ukf.P
             elif STATUS == 'PF' : 
                 pf.predict(args.Q)
                 pf.update(y_next, args.R)
@@ -215,10 +215,10 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
                 result = est.NLSF(x_hat, P_hat, [y_next], args.Q, args.R)
                 x_hat = result[ :ds]
                 x_next_hat = result[ds: ]
-                # _, P_next_hat = est.UKF(x_hat, P_hat, y_next, args.Q, args.R)
-                ukf.predict()
-                ukf.update(y_next)
-                P_next_hat = ukf.P
+                _, P_next_hat = est.UKF(x_hat, P_hat, y_next, args.Q, args.R)
+                # ukf.predict()
+                # ukf.update(y_next)
+                # P_next_hat = ukf.P
             elif STATUS == 'NLS-RLF' : 
                 # estimator Nonlinear Least Square-Reinforcement Learning Filter
                 result = est.NLSF(x_hat, P_hat, [y_next], args.Q, args.R)
@@ -257,8 +257,8 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
         print(f"lr_policy : {args.lr_policy}")
 
         # plot
-        plt.rcParams['font.sans-serif'] = ['SimHei']
-        plt.rcParams['axes.unicode_minus'] = False 
+        # plt.rcParams['font.sans-serif'] = ['SimHei']
+        # plt.rcParams['axes.unicode_minus'] = False 
         # plt.rcParams['font.size'] = 28
         fig, axs = plt.subplots(ds,1)
         for i in range(ds) : 
@@ -307,7 +307,7 @@ def main() :
     parser.add_argument("--batch_size", default=16, type=int, help="number of samples for batch update")
     parser.add_argument("--num_steps", default=8, type=int, help="number of steps in one sample")
     parser.add_argument("--warmup_size", default=200, type=int, help="decide when to start the training of the NN")
-    parser.add_argument("--hidden_layer", default=([500,500,500],[500,500,500]), help="FC layers of NN")
+    parser.add_argument("--hidden_layer", default=([500,500,500,500],[500,500,500,500]), help="FC layers of NN")
     parser.add_argument("--gamma", default=.9, type=float, help="discount factor in value function")
     parser.add_argument("--lr_value", default=1e-3, type=float, help="learning rate of value function")
     parser.add_argument("--lr_policy", default=1e-2, type=float, help="learning rate of policy net")
@@ -343,7 +343,7 @@ def main() :
     agent.policy.update_weight(input_batch, output_batch, batch_size=1, num_steps=args.max_train_steps, device=args.device, lr=1e-4)
     # save_path = os.path.join(args.output_dir, "model.bin")
     # torch.save(agent.policy.state_dict(), save_path)
-    # train(args, agent, replay_buffer)
+    train(args, agent, replay_buffer)
 
     simulate(args, sim_num=50, rand_num=10086, STATUS='NLS-RLF')
 
