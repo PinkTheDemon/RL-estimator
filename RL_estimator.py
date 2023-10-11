@@ -89,11 +89,11 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
             while output is None : # Pnew不正定，减小学习率，但不能减小全局的学习率
                 P_next_new_inv = (P_next_new_inv + P_next_hat_inv) / 2
                 output = P2o(P_next_new_inv, h_next_new)
-            replay_buffer.push(input, output) 
+            replay_buffer.push((input, output)) 
             if replay_buffer.size > args.warmup_size : 
-                input_batch, output_batch, _ = replay_buffer.sample(args.batch_size)
-                input_batch = torch.FloatTensor(input_batch)
-                output_batch = torch.FloatTensor(output_batch)
+                exp_list, _, _ = replay_buffer.sample(args.batch_size)
+                input_batch = torch.FloatTensor([exp[0] for exp in exp_list])
+                output_batch = torch.FloatTensor([exp[1] for exp in exp_list])
                 agent.policy.update_weight(input_batch, output_batch, lr=args.lr_policy)
 
             # error evaluate, MSE
