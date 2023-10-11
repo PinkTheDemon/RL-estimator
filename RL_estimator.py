@@ -70,12 +70,12 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
             P_next_hat_inv, h_next = agent.get_Pinv(x_hat, y_next, P_hat_inv, h)
 
             # solve optimization problem, get x_next_hat
-            result = est.NLSF_sos(x_hat, inv(P_hat_inv), [y_next], args.Q, args.R)
+            result = est.NLSF(x_hat, inv(P_hat_inv), [y_next], args.Q, args.R)
             x_hat_new = result[ :ds]
             x_next_hat = result[ds: ]
 
             # training 
-            x_next_noise = x_next_hat + np.random.multivariate_normal(np.zeros((ds, )), args.explore_Cov) ## 这里用OUnoise会不会提升训练效率？
+            x_next_noise = x_next_hat + np.random.multivariate_normal(np.zeros((ds, )), args.explore_Cov) ## 这里用OUnoise会不会提升训练效率？agent.noise.noise()
             target_Q = args.gamma * agent.value(x_hat, x_hat_new, P_hat_inv, h) + \
                     (x_next_noise - dyn.f(x_hat))@inv(args.Q)@(x_next_noise - dyn.f(x_hat)).T + \
                     (y_next - dyn.h(x_next_noise))@inv(args.R)@(y_next - dyn.h(x_next_noise)).T 
