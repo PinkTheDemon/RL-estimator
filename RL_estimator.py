@@ -6,22 +6,25 @@ import time
 
 import dynamics as dyn
 import estimator as est
-from functions import *
-from OUnoise import *
-from replay_buffer import *
-from actor import *
+from functions import * # 包括np
+from OUnoise import OUnoise
+from replay_buffer import ReplayBuffer
+from actor import * # 包括torch等
 
 
 class RL_estimator : 
-    def __init__(self, state_dim, obs_dim, noise:OUnoise, hidden_layer=[200,200,200,200,200,200,200,200,200,200,200],
+    def __init__(self, state_dim, obs_dim, noise:OUnoise, hidden_layer=[200],
                  rand_num=111, STATUS='train') -> None:
-        self.state_dim = state_dim
-        self.policy = Actor(state_dim, obs_dim, h=hidden_layer, rand_num=rand_num)
+        self.dim_output = ds2do(state_dim)
+        self.dim_input = state_dim + obs_dim + self.dim_output
+        self.policy = Actor(self.dim_input, self.dim_output, h=hidden_layer, rand_num=rand_num)
         self.OUnoise = noise
         self.STATUS = STATUS
 
-    def value(self, state, state_pre, Pinv, h) : 
-        Q = (state - state_pre) @ Pinv @ (state - state_pre).T + h
+    def value(self, state, state_pre, Pinv, h=None) : 
+        x = np.tile((state - state_pre), (1,1))
+        Q = x @ Pinv @ x.T
+        if h is not None : Q += h
         return Q
 
     def get_Pinv(self, state_pre, obs, Pinv_now, h) : 
@@ -30,9 +33,9 @@ class RL_estimator :
         output_last = P2o(Pinv_now, h)
         input = np.hstack((state_pre, obs, output_last))
         output = self.policy(input).detach().numpy() # + noise
-        dim_state = do2ds(output.size)
-        L = np.zeros((dim_state, dim_state))
-        for i in range(dim_state) : 
+        ds = do2ds(output.size)
+        L = np.zeros((ds, ds))
+        for i in range(ds) : 
             L[i][ :i+1] = np.copy(output[ :i+1])
             output = output[i+1: ]
         P_next_inv = L @ L.T
@@ -44,41 +47,41 @@ class RL_estimator :
 def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) : 
     sys.stdout = open(args.output_file, 'w')
 
-    MSE_min = np.zeros((args.state_dim))
+    ds = args.state_dim
+    MSE_min = np.zeros((ds))
     num_noupdate = 0
     for i in range(args.max_episodes) : 
-        # noise = OUnoise(args.state_dim, rand_num=i)
+        # noise = OUnoise(ds, rand_num=i)
         # agent.reset_noise(noise) ## 是否需要每次都基于当前最好的模型来训练，但是当前最好的模型也有可能只是在当前这一集上表现好。评价好坏可能需要与EKF的MSE作对比。
 
         x, w_list, v_list = dyn.reset(sim_num=i, maxstep=args.max_train_steps, x0_mu=args.x0_mu, P0=args.P0, disturb_Q=args.Q, noise_R=args.R)
         x_hat = args.x0_hat
-        P_hat_inv = est.inv(args.P0_hat)
+        P_hat_inv = inv(args.P0_hat)
         h = 0
-        MSE = np.zeros((args.max_episodes, args.state_dim))
+        MSE = np.zeros((ds, ))
         for t in range(args.max_train_steps) : 
             # dynamic, x is unobservable, y is observable
             if args.MODEL_MISMATCH == False : 
-                x_next,y_next = dyn.step(x,w_list[t],v_list[t])
+                x_next, y_next = dyn.step(x, w_list[t], v_list[t])
             else : 
-                x_next = real_fx(x, w_list[t])
-                y_next = real_hx(x_next, v_list[t])
+                x_next, y_next = dyn.step_real(x, w_list[t], v_list[t])
 
             # get covarience matrix P 
             P_next_hat_inv, h_next = agent.get_Pinv(x_hat, y_next, P_hat_inv, h)
 
             # solve optimization problem, get x_next_hat
-            result = est.NLSF(x_hat, est.inv(P_hat_inv), [y_next], args.Q, args.R)
-            x_hat_new = result[ :args.state_dim]
-            x_next_hat = result[args.state_dim: ]
+            result = est.NLSF_sos(x_hat, inv(P_hat_inv), [y_next], args.Q, args.R)
+            x_hat_new = result[ :ds]
+            x_next_hat = result[ds: ]
 
             # training 
-            x_next_noise = x_next_hat + np.random.multivariate_normal(np.zeros((args.state_dim, )), args.explore_Cov) ## 这里用OUnoise会不会提升训练效率？
+            x_next_noise = x_next_hat + np.random.multivariate_normal(np.zeros((ds, )), args.explore_Cov) ## 这里用OUnoise会不会提升训练效率？
             target_Q = args.gamma * agent.value(x_hat, x_hat_new, P_hat_inv, h) + \
-                    (x_next_noise - dyn.f(x_hat))@est.inv(args.Q)@(x_next_noise - dyn.f(x_hat)).T + \
-                    (y_next - dyn.h(x_next_hat))@est.inv(args.R)@(y_next - dyn.h(x_next_hat)).T 
+                    (x_next_noise - dyn.f(x_hat))@inv(args.Q)@(x_next_noise - dyn.f(x_hat)).T + \
+                    (y_next - dyn.h(x_next_noise))@inv(args.R)@(y_next - dyn.h(x_next_noise)).T 
             Q = agent.value(x_next_noise, x_next_hat, P_next_hat_inv, h_next)
             delta = Q - target_Q
-            P_next_new_inv = P_next_hat_inv - args.lr_value * delta * ((x_next_noise - x_next_hat)@(x_next_noise - x_next_hat).T) ## 梯度下降不能保证正定-不正定就不做更新直接跳过
+            P_next_new_inv = P_next_hat_inv - args.lr_value * delta * agent.value(x_next_noise.reshape(ds,1), x_next_hat.reshape(ds,1), np.eye(1)) ## 
             h_next_new = h_next - args.lr_value * delta
 
             input = np.hstack((x_hat, y_next, P2o(P_hat_inv, h)))
@@ -88,70 +91,50 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
                 output = P2o(P_next_new_inv, h_next_new)
             replay_buffer.push(input, output) 
             if replay_buffer.size > args.warmup_size : 
-                input_batch, output_batch = replay_buffer.sample(args.batch_size)
+                input_batch, output_batch, _ = replay_buffer.sample(args.batch_size)
                 input_batch = torch.FloatTensor(input_batch)
                 output_batch = torch.FloatTensor(output_batch)
                 agent.policy.update_weight(input_batch, output_batch, lr=args.lr_policy)
 
             # error evaluate, MSE
-            MSE[i] += (x - x_hat)**2 / args.max_train_steps
+            MSE += (x - x_hat)**2 / args.max_train_steps
 
             # time delay
             x = x_next
-            y = y_next
             x_hat = x_next_hat
             P_hat_inv = P_next_hat_inv
             h = h_next
 
-        print(i, ': MSE = ', MSE[i], '\n')
+        print(i, ': MSE = ', MSE, '\n')
         num_noupdate += 1
-        if (MSE[i] <= MSE_min).all() or i == 0 : 
-            MSE_min = MSE[i]
+        if (MSE < MSE_min).any() or i == 0 : 
+            if i == 0 : MSE_min = MSE
+            else : MSE_min[MSE < MSE_min] = MSE[MSE < MSE_min]
             save_path = os.path.join(args.output_dir, args.model_file)
             torch.save(agent.policy.state_dict(), save_path)
             num_noupdate = 0
-        elif num_noupdate >= 50 and (args.lr_policy/2) > args.lr_policy_min : 
+        elif num_noupdate >= 50 and (args.lr_policy/2) >= args.lr_policy_min : 
             args.lr_policy /= 2
             print("lr_policy update")
             num_noupdate = 0
         sys.stdout.flush()
+
     save_path = os.path.join(args.output_dir, args.modelend_file)
     torch.save(agent.policy.state_dict(), save_path)
     sys.stdout.close()
     sys.stdout = sys.__stdout__
 
 
-def real_fx(x, disturb=[], time_sample=.1) : 
-    x = x.T
-    x_next = np.copy(x)
-    x_next[0] = 1.1*x[1] + 0.25*x[1]
-    x_next[1] = -0.15*x[0] + 0.55*x[1]/(1+x[1]**2)
-    x = x_next
-    if len(disturb) == 0 : disturb = np.zeros_like(x)
-    x = x + disturb
-    return x
-
-def real_hx(x, noise=[]) : 
-    x = x.T
-    y = x[0] - 3*x[1]
-    if len(noise) == 0 : noise = np.zeros_like(y)
-    y = y + noise
-    return y
-
-
 def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') : 
     ds = args.state_dim
     if STATUS == 'NLS-RLF' or STATUS == 'RLF' : 
         noise = OUnoise(dim=ds, rand_num=rand_num)
-        dim_input = ds + args.obs_dim
-        dim_output = int(ds*(ds+1)/2 + 1)
-        dim_input = dim_input + dim_output
-        agent = RL_estimator(dim_input, dim_output, noise, hidden_layer=args.hidden_layer, STATUS='test')
+        agent = RL_estimator(ds, args.obs_dim, noise, hidden_layer=args.hidden_layer, STATUS='test')
         model_path = os.path.join(args.output_dir, args.model_test)
         agent.policy.load_state_dict(torch.load(model_path))
     # if STATUS == 'UKF' : 
-        # points = MerweScaledSigmaPoints(2, alpha=1., beta=2., kappa=0.)
-        # ukf = UnscentedKalmanFilter(dim_x=ds, dim_z=args.obs_dim, dt=.1, fx=fx, hx=hx, points=points)
+        # points = MerweScaledSigmaPoints(ds, alpha=1., beta=2., kappa=0.)
+        # ukf = UnscentedKalmanFilter(dim_x=ds, dim_z=args.obs_dim, dt=.01, fx=dyn.f, hx=dyn.h, points=points)
         # ukf.x = args.x0_hat # initial state
         # ukf.P = args.P0_hat # initial uncertainty
         # ukf.R = args.R
@@ -185,8 +168,7 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
             if args.MODEL_MISMATCH == False : 
                 x_next,y_next = dyn.step(x,w_list[t],v_list[t])
             else : 
-                x_next = real_fx(x, w_list[t])
-                y_next = real_hx(x_next, v_list[t])
+                x_next, y_next = dyn.step_real(x, w_list[t], v_list[t])
 
             # time record 
             start_time = time.process_time()
@@ -207,8 +189,8 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
                 x_next_hat, P_next_hat = pf.estimate()
             elif STATUS == 'RLF' : 
                 x_next_hat, _ = est.EKF(x_hat, P_hat, y_next, args.Q, args.R)
-                P_inv_next, h_next = agent.get_Pinv(x_hat, y_next, est.inv(P_hat), h)
-                P_next_hat = est.inv(P_inv_next)
+                P_inv_next, h_next = agent.get_Pinv(x_hat, y_next, inv(P_hat), h)
+                P_next_hat = inv(P_inv_next)
                 h = h_next
             elif STATUS == 'NLS-EKF' : 
                 # estimator Nonlinear Least Square-Extended Kalman Filter
@@ -222,13 +204,16 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
                 x_hat = result[ :ds]
                 x_next_hat = result[ds: ]
                 _, P_next_hat = est.UKF(x_hat, P_hat, y_next, args.Q, args.R)
+                # ukf.predict()
+                # ukf.update(y_next)
+                # P_next_hat = ukf.P
             elif STATUS == 'NLS-RLF' : 
                 # estimator Nonlinear Least Square-Reinforcement Learning Filter
                 result = est.NLSF(x_hat, P_hat, [y_next], args.Q, args.R)
                 x_hat = result[ :ds]
                 x_next_hat = result[ds: ]
-                P_inv_next, h_next = agent.get_Pinv(x_hat, y_next, est.inv(P_hat), h)
-                P_next_hat = est.inv(P_inv_next)
+                P_inv_next, h_next = agent.get_Pinv(x_hat, y_next, inv(P_hat), h)
+                P_next_hat = inv(P_inv_next)
                 h = h_next
             elif STATUS == 'FULL' : 
                 y_next_list.append(y_next)
