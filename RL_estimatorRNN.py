@@ -16,17 +16,17 @@ from replay_buffer import ReplayBuffer
 
 
 class Actor(nn.Module) : 
-    def __init__(self, state_dim, obs_dim, h1=[200], h2=[200], rand_num=111) -> None : 
+    def __init__(self, dim_input, dim_output, h1=[200], h2=[200], rand_num=111) -> None : 
         super(Actor, self).__init__()
-        np.random.seed(rand_num)
-        self.input_dim = state_dim + obs_dim
+        torch.manual_seed(rand_num)
+        self.dim_input = dim_input
         self.hidden_dim = h2[0]
-        self.output_dim = int(state_dim*(state_dim+1)/2 + 1)
+        self.dim_output = dim_output
 
         self.fc1 = nn.ModuleList()
         self.rnn = nn.GRU(h1[-1], h2[0], batch_first=True)
         self.fc2 = nn.ModuleList()
-        input_size = self.input_dim
+        input_size = self.dim_input
         for output_size in h1 : 
             self.fc1.append(nn.Linear(input_size, output_size))
             input_size = output_size
@@ -38,7 +38,7 @@ class Actor(nn.Module) :
             input_size = h2[0] * 2
         for output_size in h2[1: ] : 
             self.fc2.append(nn.Linear(input_size, output_size))
-        self.fc2.append(nn.Linear(h2[-1], self.output_dim))
+        self.fc2.append(nn.Linear(h2[-1], self.dim_output))
 
     # input_seq: time x batch x state fanguolai
     # output_seq:time x batch x output fanguolai 
@@ -83,153 +83,12 @@ def grad_clipping(net, theta) :
             param.grad[:] *= theta / norm
 
 
-# class ReplayBuffer1 : 
-#     def __init__(self, maxsize:int) -> None:
-#         self.maxsize = maxsize
-#         self.size = 0
-#         self.size_init = 0
-#         self.count = 0
-#         self.x_hat          = []
-#         self.x_hat_new      = []
-#         self.x_next_hat     = []
-#         self.y_next         = []
-#         self.P_hat_inv      = []
-#         self.P_next_hat_inv = []
-#         self.h              = []
-#         self.h_next         = []
-#         self.seq            = []
-#         self.input_init     = []
-#         self.output_init    = []
-
-#     def push_init(self, state_pre, obs, Pinv_next, h_next) : # 初始样本人为确保正确性，就不判断正定了
-#         input = np.hstack((state_pre, obs))
-#         output = P2o(Pinv_next, h_next)
-#         self.input_init.append(input)
-#         self.output_init.append(output)
-#         self.size_init += 1
-
-#     def push(self, x_hat, x_hat_new, x_next_hat, y_next, P_hat_inv, P_next_hat_inv, h, h_next, seq=True) : 
-#         try : 
-#             np.linalg.cholesky(P_next_hat_inv)
-#         except np.linalg.LinAlgError : # 矩阵非正定
-#             print('new P matrix is not positive definite')
-#             return
-
-#         if self.size < self.maxsize : 
-#             self.x_hat.append(x_hat)
-#             self.x_hat_new.append(x_hat_new)
-#             self.x_next_hat.append(x_next_hat)
-#             self.y_next.append(y_next)
-#             self.P_hat_inv.append(P_hat_inv)
-#             self.P_next_hat_inv.append(P_next_hat_inv)
-#             self.h.append(h)
-#             self.h_next.append(h_next)
-#             self.seq.append(seq)
-#             self.size += 1
-#         else : 
-#             self.x_hat[self.count]          = x_hat
-#             self.x_hat_new[self.count]      = x_hat_new
-#             self.x_next_hat[self.count]     = x_next_hat
-#             self.y_next[self.count]         = y_next
-#             self.P_hat_inv[self.count]      = P_hat_inv
-#             self.P_next_hat_inv[self.count] = P_next_hat_inv
-#             self.h[self.count]              = h
-#             self.h_next[self.count]         = h_next
-#             self.seq[self.count]            = seq
-#             self.count += 1
-#             self.count = int(self.count % self.maxsize)
-
-#     def sample(self, batch_size:int, num_steps:int, args) : 
-#         if self.size > num_steps : 
-#             x_hat_batch          = []
-#             x_hat_new_batch      = []
-#             x_next_hat_batch     = []
-#             y_next_batch         = []
-#             P_hat_inv_batch      = []
-#             P_next_hat_inv_batch = []
-#             h_batch              = []
-#             h_next_batch         = []
-#             bin = []
-#             bot = []
-#             for i in range(batch_size) : # 这边要计算新P和新h，所以先排成batch_size*num_steps×state_dim，之后再重组成3维的
-#                 index = np.random.randint(self.size+self.size_init-num_steps)
-#                 while index < self.size and self.seq[index] == False : index = np.random.randint(self.size+self.size_init-num_steps)
-#                 if index < self.size-num_steps : 
-#                     x_hat_batch += self.x_hat[index:index+num_steps]
-#                     x_hat_new_batch += self.x_hat_new[index:index+num_steps]
-#                     x_next_hat_batch += self.x_next_hat[index:index+num_steps]
-#                     y_next_batch += self.y_next[index:index+num_steps]
-#                     P_hat_inv_batch += self.P_hat_inv[index:index+num_steps]
-#                     P_next_hat_inv_batch += self.P_next_hat_inv[index:index+num_steps]
-#                     h_batch += self.h[index:index+num_steps]
-#                     h_next_batch += self.h_next[index:index+num_steps]
-#                 elif index < self.size : # 接近size尾的和size头拼在一起
-#                     x_hat_batch += self.x_hat[index:] + self.x_hat[:index+num_steps-self.size]
-#                     x_hat_new_batch += self.x_hat_new[index:] + self.x_hat_new[:index+num_steps-self.size]
-#                     x_next_hat_batch += self.x_next_hat[index:] + self.x_next_hat[:index+num_steps-self.size]
-#                     y_next_batch += self.y_next[index:] + self.y_next[:index+num_steps-self.size]
-#                     P_hat_inv_batch += self.P_hat_inv[index:] + self.P_hat_inv[:index+num_steps-self.size]
-#                     P_next_hat_inv_batch += self.P_next_hat_inv[index:] + self.P_next_hat_inv[:index+num_steps-self.size]
-#                     h_batch += self.h[index:] + self.h[:index+num_steps-self.size]
-#                     h_next_batch += self.h_next[index:] + self.h_next[:index+num_steps-self.size]
-#                 else : 
-#                     bin.append(self.input_init[index-self.size:index-self.size+num_steps])
-#                     bot.append(self.output_init[index-self.size:index-self.size+num_steps])
-#             size = len(x_hat_batch)
-#             x_hat_batch          = np.array(x_hat_batch)
-#             x_hat_new_batch      = np.array(x_hat_new_batch)
-#             x_next_hat_batch     = np.array(x_next_hat_batch)
-#             y_next_batch         = np.array(y_next_batch)
-#             P_hat_inv_batch      = np.array(P_hat_inv_batch)
-#             P_next_hat_inv_batch = np.array(P_next_hat_inv_batch)
-#             h_batch              = np.array(h_batch)
-#             h_next_batch         = np.array(h_next_batch)
-#             Q_inv_batch          = np.tile(est.inv(args.Q), (size, 1, 1))
-#             R_inv_batch          = np.tile(est.inv(args.R), (size, 1, 1))
-
-#             if size > 0 : 
-#                 x_next_noise_batch = x_next_hat_batch + np.random.multivariate_normal(np.zeros((args.state_dim, )), args.explore_Cov, size) # 不同的t会得到相同的采样值吗？——不相同，但是能保证可重现
-#                 target_Q_batch = args.gamma * agent.value(x_hat_batch, x_hat_new_batch, P_hat_inv_batch, h_batch) + \
-#                                     agent.value(x_next_noise_batch, dyn.f(x_hat_new_batch), Q_inv_batch) + \
-#                                     agent.value(y_next_batch, dyn.h(x_next_noise_batch), R_inv_batch) ## 这里以前写错了，写成了h(x_hat_batch)，应该是h(x_next_noise_batch)但在错误的情况下效果好像比正确时要好？
-#                 Q_batch = agent.value(x_next_noise_batch, x_next_hat_batch, P_next_hat_inv_batch, h_next_batch)
-#                 delta = Q_batch - target_Q_batch  ## 说实在的，现在我并没有深入理解这个算法的理论依据是什么
-#                 P_next_new_inv_batch = P_next_hat_inv_batch - args.lr_value * np.array([delta[index] * \
-#                                         agent.value_T(x_next_noise_batch, x_next_hat_batch)[index] for index in range(size)]) ## 梯度下降不能保证Pnew正定-不正定就不做更新直接跳过
-#                 h_next_new_batch = h_next_batch - args.lr_value * delta
-#                 input_batch  = np.concatenate((x_hat_batch, y_next_batch), axis=1).tolist() ## 这里以前写错了，写成了x_next_hat_batch，应该是x_hat_batch
-#                 output_batch = [P2o(P_next_new_inv_batch[index], h_next_new_batch[index]) for index in range(size)]
-#                 # 删除由于Pnew非正定导致的output中为[]的元素
-#                 del_list = []
-#                 for n in range(size) : 
-#                     if output_batch[n] == [] : 
-#                         del_list.append(n)
-#                 if del_list != [] :
-#                     input_batch  = [input_batch[index]  for index in range(batch_size) if index not in del_list]
-#                     output_batch = [output_batch[index] for index in range(batch_size) if index not in del_list]
-#                 # 重排维度，得到batch_size × num_steps × input_dim
-#                 input_batch = [input_batch[i:i+num_steps] for i in range(batch_size)]
-#                 output_batch = [output_batch[i:i+num_steps] for i in range(batch_size)]
-#                 # 将init中的样本和收集的样本拼接起来
-#                 bin = bin + input_batch
-#                 bot = bot + output_batch
-#         else : 
-#             bin = [self.input_init]
-#             bot = [self.output_init]
-
-#         # 转成张量并且对前两维进行转置，将时间维度换到第一个维度，即num_steps × batch_size × state
-#         bin = torch.FloatTensor(bin).transpose(0,1)
-#         bot = torch.FloatTensor(bot).transpose(0,1)
-
-#         return bin, bot
-
-
 class RL_estimator : 
-    def __init__(self, state_dim, obs_dim, device, noise:OUnoise, hidden_layer=([200,200,200,200,200],[200,200,200,200,200]),
-                 rand_num=111, STATUS='train') -> None:
+    def __init__(self, state_dim, obs_dim, device, noise:OUnoise, hidden_layer=([200],[200]), STATUS='train') -> None:
         self.state_dim = state_dim
-        torch.manual_seed(rand_num)
-        self.policy = Actor(state_dim, obs_dim, h1=hidden_layer[0], h2=hidden_layer[1]).to(device)
+        dim_input = state_dim + obs_dim
+        dim_output = ds2do(state_dim)
+        self.policy = Actor(dim_input, dim_output, h1=hidden_layer[0], h2=hidden_layer[1]).to(device)
         self.device = device
         self.OUnoise = noise
         self.STATUS = STATUS
@@ -263,29 +122,6 @@ class RL_estimator :
         self.noise = noise
 
 
-# def quad_value(state, state_pre, Pinv, h=None) : 
-#     quad = lambda x1, x2, W, h : (x1 - x2) @ W @ (x1 - x2).T + h
-
-#     batch_size = state.shape[0]
-#     if h is None : h = np.zeros((batch_size, ))
-#     if batch_size == 1 : 
-#         Q = quad(state, state_pre, Pinv, h)
-#     elif batch_size >= 2 : 
-#         Q = [quad(state[i], state_pre[i], Pinv[i], h[i]) for i in range(batch_size)]
-#     return np.array(Q)
-
-# def quad_value_T(state, state_pre, h=None) : 
-#     quad = lambda x1, x2, h : (x1 - x2).T @ (x1 - x2) + h
-
-#     batch_size = state.shape[0]
-#     if h is None : h = np.zeros((batch_size, 2,2))
-#     if batch_size == 1 : 
-#         Q = quad(state, state_pre, h)
-#     elif batch_size >= 2 : 
-#         Q = [quad(np.tile(state[i],(1,1)), np.tile(state_pre[i],(1,1)), h[i]) for i in range(batch_size)]
-#     return np.array(Q)
-
-
 def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) : 
     sys.stdout = open(args.output_file, 'w')
 
@@ -316,7 +152,6 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
 
             # solve optimization problem, get x_next_hat
             result = est.NLSF(x_hat, est.inv(P_hat_inv), [y_next], args.Q, args.R)
-            # result = est.OPTF(x_pre, est.inv(P_pre_inv), y, args.Q, args.R)
             x_hat_new = result[ :ds]
             x_next_hat = result[ds: ]
 
@@ -412,24 +247,6 @@ def train(args, agent:RL_estimator, replay_buffer:ReplayBuffer) :
     torch.save(agent.policy.state_dict(), save_path)
     sys.stdout.close()
     sys.stdout = sys.__stdout__
-
-
-def real_fx(x, disturb=[], time_sample=.1) : 
-    x = x.T
-    x_next = np.copy(x)
-    x_next[0] = 1.1*x[1] + 0.25*x[1]
-    x_next[1] = -0.15*x[0] + 0.55*x[1]/(1+x[1]**2)
-    x = x_next
-    if len(disturb) == 0 : disturb = np.zeros_like(x)
-    x = x + disturb
-    return x
-
-def real_hx(x, noise=[]) : 
-    x = x.T
-    y = x[0] - 3*x[1]
-    if len(noise) == 0 : noise = np.zeros_like(y)
-    y = y + noise
-    return y
 
 
 def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') : 
@@ -550,8 +367,8 @@ def simulate(args, sim_num=1, rand_num=1111, STATUS='EKF') :
         print(f"lr_policy : {args.lr_policy}")
 
         # plot
-        plt.rcParams['font.sans-serif'] = ['SimHei']
-        plt.rcParams['axes.unicode_minus'] = False 
+        # plt.rcParams['font.sans-serif'] = ['SimHei']
+        # plt.rcParams['axes.unicode_minus'] = False 
         # plt.rcParams['font.size'] = 28
         fig, axs = plt.subplots(ds,1)
         for i in range(ds) : 
