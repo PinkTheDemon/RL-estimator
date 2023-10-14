@@ -1,10 +1,11 @@
 import numpy as np
+from scipy.integrate import solve_ivp
 
 
 def f(x, u=None, disturb=None, sample_time=0.01, batch_first:bool=True) : 
-    if batch_first is True : x = x.T
 
     # disceret form
+    # if batch_first is True : x = x.T
     # x_next = np.zeros_like(x)
     # # dynamics 1 #########################################
     # x_next[0] = 0.99*x[0] + 0.2*x[1]
@@ -15,23 +16,28 @@ def f(x, u=None, disturb=None, sample_time=0.01, batch_first:bool=True) :
     # # x_next[1] = -0.1*x[0] + 0.5*x[1]/(1+x[1]**2)
     # # ####################################################
     # x = x_next
+    # if batch_first is True : x = x.T
 
     # continuous form
-    xdot = np.zeros_like(x)
-    dt = 0.01
-    for _ in range(int(sample_time/dt)) : 
+    xdot = lambda t, y : ( np.array([
         # dynamics 3 #####################################
-        # xdot[0] = -x[1]
-        # xdot[1] = -0.2*(1-x[0]**2)*x[1] + x[0]
+        # -x[1],
+        # -0.2*(1-x[0]**2)*x[1] + x[0]
         # ################################################
-        # dynamics 4 #####################################
-        xdot[0] = 10*(-x[0]+x[1])
-        xdot[1] = 28*x[0] - x[1] - x[0]*x[2]
-        xdot[2] = -8/3*x[2] + x[0]*x[1]
-        # ################################################
-        x = x + dt*xdot
+        # dynamics 4 ####################################
+        10*(-y[0]+y[1]),
+        28*y[0] - y[1] - y[0]*y[2],
+        -8/3*y[2] + y[0]*y[1]
+        # ###############################################
+        ]) )
+    if x.ndim == 1 : 
+        x = solve_ivp(xdot, [0,0+sample_time], x).y.T[-1]
+    elif x.ndim == 2 : 
+        x_next = np.array([]).reshape(0, x[0].size)
+        for y in x : 
+            x_next = np.append(x_next, [solve_ivp(xdot, [0,0+sample_time], y).y.T[-1]], axis=0)
+        x = x_next
 
-    if batch_first is True : x = x.T
     if disturb is not None : x = x + disturb
     return x
 
@@ -151,7 +157,7 @@ def reset(sim_num, maxstep, x0_mu, P0, disturb_Q, noise_R,
 
 '''
 f
-状态方程
+状态方程 微分方程通过RK45方法数值求解
 --------------------------------------------------
 输入           含义        数据类型    取值范围    说明
 x              状态        ndarray     --          无

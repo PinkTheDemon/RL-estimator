@@ -392,3 +392,9 @@ main函数：{
 ### 20231009 replay_buffer修改
 
 以前的属性是self.input和self.output，现在改成了self.experience和self.information，即把原来的input整合到了experience里，information可以存一些额外的信息。存入时，information默认为None。当然，以前的写法仍然可以沿用，但是意义不太对应就是了，关于以前对push_init和push的调用就放着之后再修改吧。
+
+
+
+### 20231014 修改连续形式系统动态
+
+对于以状态导数形式给出的系统动态，以前直接x=x+xdot*dt，现在改成利用四阶龙格库塔方法数值求解微分方程。同样做了对批量状态输入状态的适配。
