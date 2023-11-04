@@ -382,7 +382,6 @@ def main() :
         # if i == 1 : args.explore_Cov = np.array([[.001,0,0],[0,.01,0],[0,0,.001]])
         # args.model_test = 'model3.bin'
         args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        # args.gamma = 0.82+0.3*i
 
         noise = OUnoise(args.state_dim)
         agent = RL_estimator(state_dim=args.state_dim, obs_dim=args.obs_dim, device=args.device, noise=noise, hidden_layer=args.hidden_layer, STATUS='test')
