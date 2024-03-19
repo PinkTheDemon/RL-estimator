@@ -1,5 +1,6 @@
 import numpy as np
-
+import sys
+import os
 
 # Pinv(n,n) to L(n,n) to output(1,n*(n+1)/2)
 def P2o( P, h=None) : 
@@ -84,6 +85,64 @@ def do2ds(dim_output:int) :
     else : 
         return None
 
+
+def checkFilename(filename:str) -> str : 
+    baseName, extension = os.path.splitext(filename)
+    index = 1
+    while (os.path.exists(filename)) : 
+        # 如果文件存在，自动更名
+        filename = f'{baseName}({index}){extension}'
+        index += 1
+    return filename
+
+
+class LogFile() : 
+    def __init__(self, fileName='output/log.txt', rename_option=False) -> None:
+        # 文件已经存在则自动更名
+        if rename_option : 
+            baseName, extension = os.path.splitext(fileName)
+            index = 1
+            while (os.path.exists(fileName)) : 
+                # 如果文件存在，自动更名
+                fileName = f'{baseName}({index}){extension}'
+                index += 1
+        # ----------
+        self.fileName = fileName
+        sys.stdout = open(self.fileName, 'w')
+
+    def flush(self) -> None : 
+        sys.stdout.flush()
+
+    # def addParam(self, args) -> None : 
+    #     with open('param.py', 'r', encoding='utf-8') as source : 
+    #         with open(self.fileName, 'a') as target : 
+    #             target.write(source.read())
+
+    def endLog(self) -> None : 
+        sys.stdout.close()
+        sys.stdout = sys.__stdout__
+        del self
+
+
+def cholesky4semi(A) : 
+    try : 
+        L = np.linalg.cholesky(A)
+    except np.linalg.LinAlgError : 
+        # 对半正定矩阵进行特征值分解
+        eigenvalues, eigenvectors = np.linalg.eigh(A)
+        # 构建半正定矩阵的 Cholesky 分解(但这种做法的L并不是下三角，因为特征向量是单位向量，组合起来很可能不是下三角)
+        L = np.dot(eigenvectors, np.diag(np.sqrt(eigenvalues)))
+    return L
+
+
+def P3dtoP4d(x_bar, P3d, h3d=None) : 
+    x_bar = x_bar[np.newaxis,:]
+    P4d = np.array([[(x_bar@P3d@x_bar.T).item(), (x_bar@P3d[:][0]).item(), (x_bar@P3d[:][1]).item(), (x_bar@P3d[:][2]).item()],
+                    [(P3d[0]@x_bar.T).item(),    P3d[0][0], P3d[0][1], P3d[0][2]],
+                    [(P3d[1]@x_bar.T).item(),    P3d[1][0], P3d[1][1], P3d[1][2]],
+                    [(P3d[2]@x_bar.T).item(),    P3d[2][0], P3d[2][1], P3d[2][2]]])
+    if h3d is not None : P4d[0][0] += h3d
+    return P4d
 
 '''
 P2o
