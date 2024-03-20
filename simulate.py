@@ -115,7 +115,7 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
                 if len(y_list) > args.window : del y_list[0]
                 # ----------
                 # 求解非线性最小二乘，得到 x_next_hat
-                result = est.NLSF_uniform(P0_NLSF, y_seq=y_list, Q=model.Q, R=model.R, x0=initial_x, mode="quadratic", x0_bar=x0_NLSF)
+                result, _ = est.NLSF_uniform(inv(P0_NLSF), y_seq=y_list, Q=model.Q, R=model.R, x0=initial_x, mode="quadratic", x0_bar=x0_NLSF)
                 x_next_hat = result[-ds: ]
                 x_hat_seq.append(x_next_hat)
                 # ----------
@@ -124,12 +124,15 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
                 else : # 窗口已满，用不同的方法更新x0_NLSF 和 P0_NLSF
                     initial_x = list(result.reshape(-1,3))[1:]
                     if 'EKF' in STATUS : 
+                        # 09. Computing arrival cost parameters in moving horizon estimation using sampling based filters
                         F = model.F(model.f(x0_NLSF))
                         H = model.H(model.f(x0_NLSF))
                         P0_NLSF = F@P0_NLSF@F.T + model.Q - F@P0_NLSF@H.T@ inv(H@P0_NLSF@H.T + model.R) @ H@P0_NLSF@F.T
+                        # ----------
+                        # _, P0_NLSF = est.EKF(x0_NLSF, P0_NLSF, y_seq[t-args.window+1], model.Q, model.R)
                     if 'UKF' in STATUS : ## 尚未修改正确
                         _, P0_NLSF = est.UKF(x0_NLSF, P0_NLSF, y_seq[t-args.window+1], model.Q, model.R)
-                    x0_NLSF = x_hat_seq[t-args.window+1] # x_hat_k|k
+                    x0_NLSF = x_hat_seq[t-args.window+1] # x_hat_k+1|k+1
                 # end if t(step)
                 P_hat_seq.append(P0_NLSF)
             #end for t(step)

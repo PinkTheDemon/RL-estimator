@@ -8,6 +8,8 @@ class Model() :
         self.dim_obs = dim_obs
         self.f = f
         self.h = h
+        self.F = F
+        self.H = H
         self.x0_mu = x0_mu
         self.P0 = P0
         self.Q = Q

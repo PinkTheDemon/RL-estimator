@@ -144,17 +144,17 @@ class SumOfSquares() :
             J = np.vstack((J, Jadd))
             L = block_diag((L, LQ))
 
-        return L@J
+        return L.T@J
 
 class Quadratic() : 
     def __init__(self) -> None:
         pass
 
-    def res_fun(self, x, P_inv, y_seq, Q, R, x0_bat, xend=None) : 
+    def res_fun(self, x, P_inv, y_seq, Q, R, x0_bar, xend=None) : 
         num_obs = len(y_seq)
         ds = int(x.size / (num_obs+1))
 
-        f = np.tile(np.array(x[:ds] - x0_bat), (1,1))
+        f = np.tile(np.array(x[:ds] - x0_bar), (1,1))
         M = P_inv[:]
         for i in range(num_obs) : 
             f = np.hstack((f, x[ds*(i+1):ds*(i+2)]-dyn.f(x[ds*(i):ds*(i+1)])[np.newaxis,:], 
@@ -165,10 +165,10 @@ class Quadratic() :
             f = np.hstack((f, (xend-dyn.f(x[-ds:]))[np.newaxis,:]))
             M = block_diag((M, inv(Q)))
         
-        L = cholesky4semi(M)
+        L = np.linalg.cholesky(M)
         return (f@L).reshape(-1)
 
-    def jac_fun(self, x, P_inv, y_seq, Q, R, x0_bat, xend=None) : 
+    def jac_fun(self, x, P_inv, y_seq, Q, R, x0_bar, xend=None) : 
         num_obs = len(y_seq)
         ds = int(x.size / (num_obs+1))
         jadd = lambda x0, x1 : np.vstack((np.hstack((-dyn.F(x0), np.eye(ds))), np.pad(-dyn.H(x1), ((0,0),(ds,0)))))
@@ -186,7 +186,7 @@ class Quadratic() :
             J = np.vstack((J, Jadd))
             M = block_diag((M, inv(Q)))
 
-        L = cholesky4semi(M).T
+        L = np.linalg.cholesky(M).T
         return L@J
 
 
