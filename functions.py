@@ -137,12 +137,29 @@ def cholesky4semi(A) :
 
 def P3dtoP4d(x_bar, P3d, h3d=None) : 
     x_bar = x_bar[np.newaxis,:]
-    P4d = np.array([[(x_bar@P3d@x_bar.T).item(), (x_bar@P3d[:][0]).item(), (x_bar@P3d[:][1]).item(), (x_bar@P3d[:][2]).item()],
-                    [(P3d[0]@x_bar.T).item(),    P3d[0][0], P3d[0][1], P3d[0][2]],
-                    [(P3d[1]@x_bar.T).item(),    P3d[1][0], P3d[1][1], P3d[1][2]],
-                    [(P3d[2]@x_bar.T).item(),    P3d[2][0], P3d[2][1], P3d[2][2]]])
-    if h3d is not None : P4d[0][0] += h3d
+    P4d = np.array([[(x_bar@P3d@x_bar.T).item(), (x_bar@P3d[:,0]).item(), (x_bar@P3d[:,1]).item(), (x_bar@P3d[:,2]).item()],
+                    [(P3d[0]@x_bar.T).item(),    P3d[0,0], P3d[0,1], P3d[0,2]],
+                    [(P3d[1]@x_bar.T).item(),    P3d[1,0], P3d[1,1], P3d[1,2]],
+                    [(P3d[2]@x_bar.T).item(),    P3d[2,0], P3d[2,1], P3d[2,2]]])
+    if h3d is not None : P4d[0,0] += h3d
     return P4d
+
+def cholesky_unique(A): # 半正定矩阵的cholesky分解之一（可能因为舍入误差出现nan）
+        A_temp = np.copy(A)
+        L = np.zeros_like(A_temp)
+        L[0,0] = np.sqrt(A_temp[0,0])
+
+        for i in range(1, L.shape[0]) : 
+            L[i:,i-1] = A_temp[i:,i-1]/L[i-1,i-1]
+            A_temp[i:,i:] = A_temp[i:,i:] - A_temp[i:,i-1].reshape(-1,1)@A_temp[i:,i-1].reshape(1,-1)/A_temp[i-1,i-1]
+            L[i,i] = np.sqrt(A_temp[i,i])
+
+        # if L.shape[0] > 1 : 
+        #     L[1:,0] = A_temp[1:,0]/L[0,0]
+        #     A_temp = np.copy(A_temp)
+        #     A_temp[1:,1:] = A_temp[1:,1:] - A_temp[1:, 0].reshape(-1,1)@A_temp[1:, 0].reshape(1,-1)/A_temp[0,0]
+        #     L[1:,1:] = cholesky_unique(A_temp[1:, 1:])
+        return L
 
 '''
 P2o
