@@ -4,9 +4,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import estimator as est
-from functions import inv
+from model import create_model
+from def_param2 import def_param2
+from functions import inv, LogFile
 
-def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', plot_flag=False) : 
+def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', plot_flag=False, x_batch=None, y_batch=None) : 
     # 常用变量读取
     ds = model.dim_state
     # ---------
@@ -25,9 +27,13 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
         # 设置随机数种子
         np.random.seed(rand_seed+i)
         # ----------
-        # 随机生成一条测试轨迹
+        # 获取一条测试轨迹
         t_seq = range(args.max_sim_steps)
-        x_seq, y_seq = model.generate_data(args.max_sim_steps, is_mismatch=args.MODEL_MISMATCH, rand_seed=rand_seed+i)
+        if x_batch is not None : 
+            x_seq = x_batch[i]
+            y_seq = y_batch[i]
+        else : 
+            x_seq, y_seq = model.generate_data(args.max_sim_steps, is_mismatch=args.MODEL_MISMATCH, rand_seed=rand_seed+i)
         # ----------
         # 记录一条轨迹状态估计所需的cpu时间开始点
         start_time = time.process_time()
@@ -69,16 +75,16 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
             for t in t_seq : 
                 # 获取真实观测值
                 y_list.append(y_seq[t])
-                if len(y_list) > args.train_window : del y_list[0]
+                if len(y_list) > args.window : del y_list[0]
                 # ----------
-                if t < args.train_window -1 : # 窗口未满
+                if t < args.window -1 : # 窗口未满
                     # 求解非线性最小二乘，得到 x_next_hat
                     result, _ = est.NLSF_uniform(args.P0_hat, y_seq=y_list, Q=model.Q, R=model.R, mode="quadratic", x0=initial_x, x0_bar=args.x0_hat)
                     x_next_hat = result[-ds: ]
                     x_hat_seq.append(x_next_hat)
                     initial_x = np.vsplit(result[:].reshape(-1,ds), 1)
                     # ----------
-                elif t == args.train_window -1 : # 窗口刚满，arrival cost从0到1
+                elif t == args.window -1 : # 窗口刚满，arrival cost从0到1
                     # 求解非线性最小二乘，得到 x_next_hat
                     result, _ = est.NLSF_uniform(args.P0_hat, y_seq=y_list, Q=model.Q, R=model.R, mode="quadratic", x0=initial_x, x0_bar=args.x0_hat)
                     x_next_hat = result[-ds: ]
@@ -86,7 +92,7 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
                     initial_x = np.vsplit(result[ds: ].reshape(-1,ds), 1)
                     # ----------
                     # 基于 x_k|k 和 y_k+1 得到 L0_NLSF
-                    inputTensor = torch.FloatTensor(np.hstack((args.x0_hat, y_seq[t-args.train_window+1])), device=agent.device).reshape(1,1,-1)
+                    inputTensor = torch.FloatTensor(np.hstack((args.x0_hat, y_seq[t-args.window+1])), device=agent.device).reshape(1,1,-1)
                     L0_NLSF, hidden = agent.policy.forward(input_seq=inputTensor, hidden=hidden, batch_size=1)
                     L0_NLSF = L0_NLSF.squeeze().detach().cpu().numpy()
                     # ----------
@@ -98,7 +104,7 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
                     initial_x = np.vsplit(result[ds: ].reshape(-1,ds), 1)
                     # ----------
                     # 基于 x_k|k 和 y_k+1 得到 L0_NLSF
-                    inputTensor = torch.FloatTensor(np.hstack((x_hat_seq[t-args.train_window], y_seq[t-args.train_window+1])), device=agent.device).reshape(1,1,-1)
+                    inputTensor = torch.FloatTensor(np.hstack((x_hat_seq[t-args.window], y_seq[t-args.window+1])), device=agent.device).reshape(1,1,-1)
                     L0_NLSF, hidden = agent.policy.forward(input_seq=inputTensor, hidden=hidden, batch_size=1)
                     L0_NLSF = L0_NLSF.squeeze().detach().cpu().numpy()
                     # ----------
@@ -190,3 +196,51 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
         # ----------
     # end if STATUS(== INIT)
 # end function simulate
+            
+
+if __name__ == "__main__" : 
+    # 选择执行测试的方法
+    test_option = ["EKF", "EKF-MHE"] # , "UKF", "UKF-MHE", "FIE"
+    # ----------
+    logfile = LogFile("output/test_results.txt", rename_option=True)
+    args, model_paras_dict, estimator_paras_dict = def_param2()
+    model = create_model(**model_paras_dict)
+    print(f"x0_mu: {model.x0_mu}, x0_hat: {args.x0_hat}")
+    print(f"P0_mu: {model.P0}")
+    print(f"P0_hat: {args.P0_hat}")
+    # print(f"Q: {model.Q}")
+    # print(f"Q_hat: {args.Q_hat}")
+    # print(f"R: {model.R}")
+    # print(f"R_hat: {args.R_hat}")
+    print("********************")
+    if "EKF" in test_option : 
+        print("EKF:")
+        logfile.flush()
+        simulate(model, args, None, sim_num=50, rand_seed=10086, STATUS="EKF")
+        print("********************")
+    if "UKF" in test_option : 
+        print("UKF:")
+        logfile.flush()
+        simulate(model, args, None, sim_num=50, rand_seed=10086, STATUS="UKF")
+        print("********************")
+    if "EKF-MHE" in test_option : 
+        for i in range(10) : 
+            args.window = i+1
+            print(f"EKF-MHE, window length {args.window}: ")
+            logfile.flush()
+            simulate(model, args, None, sim_num=50, rand_seed=10086, STATUS="EKF-MHE")
+            print("********************")
+    if "UKF-MHE" in test_option : 
+        for i in range(10) : 
+            args.window = i+1
+            print(f"UKF-MHE, window length {args.window}: ")
+            logfile.flush()
+            simulate(model, args, None, sim_num=50, rand_seed=10086, STATUS="UKF-MHE")
+            print("********************")
+    if "FIE" in test_option : 
+        print("FIE:")
+        logfile.flush()
+        simulate(model, args, None, sim_num=50, rand_seed=10086, STATUS="FIE")
+        print("********************")
+    logfile.flush()
+    logfile.endLog()
