@@ -54,7 +54,7 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
             x_hat = args.x0_hat
             P_hat = args.P0_hat
             for t in t_seq : 
-                if STATUS.upper() == 'EKF' or STATUS.upper()=='init': 
+                if STATUS.upper() == 'EKF' or STATUS.upper()=='INIT': 
                     x_next_hat, P_next_hat = est.EKF(x_hat, P_hat, y_seq[t], model.Q, model.R)
                 elif STATUS.upper() == 'UKF' : 
                     x_next_hat, P_next_hat = est.UKF(x_hat, P_hat, y_seq[t], model.Q, model.R)
