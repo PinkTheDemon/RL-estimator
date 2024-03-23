@@ -2,7 +2,7 @@ import numpy as np
 from scipy.optimize import least_squares
 from scipy.stats import multivariate_normal
 
-from functions import block_diag, inv, delete_empty, cholesky4semi
+from functions import block_diag, inv, delete_empty
 import dynamics as dyn
 
 # Extended Kalman Filter
@@ -35,7 +35,7 @@ def UKF(state, P, obs_next, Q, R, alpha=.5, beta=2., kappa=-5.) :
     xa = np.hstack((state, np.zeros((nw, )), np.zeros((nv, ))))
     xa_sigma = np.tile(xa, (2*na+1, 1))
     M = (na+lamda)*block_diag([P, Q, R])
-    M = cholesky4semi(M)
+    M = np.linalg.cholesky(M)
     xa_sigma[1:na+1] = xa_sigma[1:na+1] + M
     xa_sigma[na+1: ] = xa_sigma[na+1: ] - M
     xx_sigma = xa_sigma[:, :n]
@@ -58,7 +58,7 @@ def UKF(state, P, obs_next, Q, R, alpha=.5, beta=2., kappa=-5.) :
     xa = np.hstack((x_next_pre_aver, np.zeros((nw, )), np.zeros((nv, ))))
     xa_sigma = np.tile(xa, (2*na+1, 1))
     M = (na+lamda)*block_diag([P_next_pre, Q, R])
-    M = cholesky4semi(M)
+    M = np.linalg.cholesky(M)
     xa_sigma[1:na+1] = xa_sigma[1:na+1] + M
     xa_sigma[na+1: ] = xa_sigma[na+1: ] - M
     xx_sigma = xa_sigma[:, :n]
@@ -89,7 +89,7 @@ def NLSF_uniform(P_inv, y_seq, Q, R, mode:str="quadratic", x0=None, **args) :
         fun = Quadratic()
         params = [P_inv, y_seq, Q, R, args["x0_bar"]]
     
-    if "xend" in mode : params.append(args["xend"])
+    if "end" in mode.lower() : params.append(args["xend"])
 
     ds = Q.shape[0]
     if x0 is None : 
@@ -295,7 +295,7 @@ def res_fun_xt(x, xt_bar, Pt_inv, y_list, xte, Q_inv, R_inv) :
     Q_block = block_diag([Q_inv for _ in range(num_var)])
     R_block = block_diag([R_inv for _ in range(num_var-1)])
     L = block_diag([Pt_inv, Q_block, R_block])
-    L = cholesky4semi(L)
+    L = np.linalg.cholesky(L)
 
     f = (f @ L).reshape(-1)
     return f
@@ -319,7 +319,7 @@ def jac_fun_xt(x, xt_hat, Pt_inv, y_list, xte, Q_inv, R_inv) :
     Q_block = block_diag([Q_inv for _ in range(num_obs+1)])
     R_block = block_diag([R_inv for _ in range(num_obs)])
     L = block_diag([Pt_inv, Q_block, R_block])
-    L = cholesky4semi(L).T
+    L = np.linalg.cholesky(L).T
 
     return (L @ J)
 
@@ -354,7 +354,7 @@ def residual_fun_sos(x, state_hat, ds, P_pre, obs_next_list, Q, R) :
     Q = block_diag([Q for i in range(num_var-1)])
     R = block_diag([R for i in range(num_var-1)])
     L = block_diag([inv(P_pre), inv(Q), inv(R)])
-    L = cholesky4semi(L)
+    L = np.linalg.cholesky(L)
 
     f = (f @ L).reshape(-1)
 
@@ -377,7 +377,7 @@ def jac_fun_sos(x, state_hat, ds, P_pre, obs_next_list, Q, R) :
     Q = block_diag([Q for i in range(num_obs)])
     R = block_diag([R for i in range(num_obs)])
     L = block_diag([inv(P_pre), inv(Q), inv(R)])
-    L = cholesky4semi(L).T
+    L = np.linalg.cholesky(L).T
 
     return (L @ J)
 

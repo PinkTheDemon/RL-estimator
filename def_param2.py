@@ -3,13 +3,11 @@ import torch
 import numpy as np
 
 def def_param2() : 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
     parser = argparse.ArgumentParser()
     '''simulate parameters'''
     parser.add_argument("--STATUS", default="EKF", type=str, help="simulate method")
-    parser.add_argument("--x0_hat", default=np.array([0., 0., 1.]), help="estimation of initial state distribution average")
-    parser.add_argument("--P0_hat", default=np.eye(3), help="estimation of initial state distribution covariance")
+    parser.add_argument("--x0_hat", default=np.array([10, 0, 0]), help="estimation of initial state distribution average")
+    parser.add_argument("--P0_hat", default=np.diag((10, 10, 10)), help="estimation of initial state distribution covariance")
     parser.add_argument("--MODEL_MISMATCH", default=False, type=bool, help="choose whether to apply model mismatch")
     parser.add_argument("--window", default=1, type=int, help="MHE window length")
     '''training parameters'''
@@ -21,8 +19,8 @@ def def_param2() :
     parser.add_argument("--warmup_size", default=200, type=int, help="decide when to start the training of the NN")
     parser.add_argument("--gamma", default=1., type=float, help="discount factor in value function")
     parser.add_argument("--lr_value", default=1e-3, type=float, help="learning rate of value function")
-    parser.add_argument("--lr_policy", default=1e-3, type=float, help="learning rate of policy net")
-    parser.add_argument("--lr_policy_min", default=1e-7, type=float, help="minimum learning rate of policy net")
+    parser.add_argument("--lr_policy", default=1e-4, type=float, help="learning rate of policy net")
+    parser.add_argument("--lr_policy_min", default=1e-6, type=float, help="minimum learning rate of policy net")
     parser.add_argument("--hidden_layer", default=([256], 32, [256]), help="hidden layers of NN")
     parser.add_argument("--explore_Cov", default=np.array([[.001,0,0],[0,.001,0],[0,0,.001]]), help="the covariance of Guassian distribution added to predicted state")
     parser.add_argument("--train_window", default=1, type=int, help="MHE window length")
@@ -30,18 +28,28 @@ def def_param2() :
     parser.add_argument("--rename_option", default=False, type=bool, help="whether to rename the output file")
     parser.add_argument("--output_dir", default="output", type=str, help="path for files to save outputs such as model")
     parser.add_argument("--output_file", default="output/log.txt", type=str, help="file to save training messages")
-    parser.add_argument("--model_file", default="model.bin", type=str, help="trained model")
-    parser.add_argument("--modelend_file", default="modelend.bin", type=str, help="trained model")
-    parser.add_argument("--model_test", default="modelend.bin", type=str, help="trained model")
+    parser.add_argument("--modelend_file", default="output/modelend.bin", type=str, help="trained model")
     args = parser.parse_args()
     if isinstance(args.hidden_layer, str) : args.hidden_layer = eval(args.hidden_layer)
+    return args
+
+def set_params(args):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # model_paras_dict = {
+    #     "dim_state": 3,
+    #     "dim_obs": 2,
+    #     "x0_mu": np.array([10, 10, 10]),
+    #     "P0": .1*np.eye(3),
+    #     "Q": np.array([[.001,0,0],[0,.001,0],[0,0,1.]]),
+    #     "R": np.array([[1.,0], [0,1.]]),
+    # }
     model_paras_dict = {
         "dim_state": 3,
         "dim_obs": 2,
-        "x0_mu": np.array([10, 10, 10]),
-        "P0": .1*np.eye(3),
-        "Q": np.array([[.001,0,0],[0,.001,0],[0,0,1.]]),
-        "R": np.array([[1.,0], [0,1.]]),
+        "x0_mu": np.array([10, 0, 0]),
+        "P0": np.diag((10., 10., 10.)),
+        "Q": np.array([[1.,0,0],[0,1.,0],[0,0,1.]]),
+        "R": np.array([[100.,0], [0,100.]]),
     }
     estimator_dict = {
         "dim_state": 3,
@@ -61,4 +69,4 @@ def def_param2() :
             "device": device,
         },
     }
-    return args, model_paras_dict, estimator_dict
+    return model_paras_dict, estimator_dict

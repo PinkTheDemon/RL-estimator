@@ -31,13 +31,13 @@ def block_diag(matrix_list) :
 
 
 # inverse of lower triangular matrix M
-def inv(M) : 
+def inv(M:np.ndarray) : 
     if M.shape == (1,1) : 
         return 1/M 
     else :
         L = np.linalg.cholesky(M)
         L_inv = np.linalg.inv(L)
-        M_inv = L_inv.T @ L_inv
+        M_inv = L_inv.transpose(*range(L_inv.ndim - 2), -1, -2) @ L_inv
         return M_inv
 
 
@@ -124,23 +124,12 @@ class LogFile() :
         del self
 
 
-def cholesky4semi(A) : 
-    try : 
-        L = np.linalg.cholesky(A)
-    except np.linalg.LinAlgError : 
-        # 对半正定矩阵进行特征值分解
-        eigenvalues, eigenvectors = np.linalg.eigh(A)
-        # 构建半正定矩阵的 Cholesky 分解(但这种做法的L并不是下三角，因为特征向量是单位向量，组合起来很可能不是下三角)
-        L = np.dot(eigenvectors, np.diag(np.sqrt(eigenvalues)))
-    return L
-
-
 def P3dtoP4d(x_bar, P3d, h3d=None) : 
     x_bar = x_bar[np.newaxis,:]
-    P4d = np.array([[(x_bar@P3d@x_bar.T).item(), (x_bar@P3d[:,0]).item(), (x_bar@P3d[:,1]).item(), (x_bar@P3d[:,2]).item()],
-                    [(P3d[0]@x_bar.T).item(),    P3d[0,0], P3d[0,1], P3d[0,2]],
-                    [(P3d[1]@x_bar.T).item(),    P3d[1,0], P3d[1,1], P3d[1,2]],
-                    [(P3d[2]@x_bar.T).item(),    P3d[2,0], P3d[2,1], P3d[2,2]]])
+    P4d = np.array([[(x_bar@P3d@x_bar.T).item(), -(x_bar@P3d[:,0]).item(), -(x_bar@P3d[:,1]).item(), -(x_bar@P3d[:,2]).item()],
+                    [-(P3d[0]@x_bar.T).item(),    P3d[0,0], P3d[0,1], P3d[0,2]],
+                    [-(P3d[1]@x_bar.T).item(),    P3d[1,0], P3d[1,1], P3d[1,2]],
+                    [-(P3d[2]@x_bar.T).item(),    P3d[2,0], P3d[2,1], P3d[2,2]]])
     if h3d is not None : P4d[0,0] += h3d
     return P4d
 
