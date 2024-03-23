@@ -1,5 +1,4 @@
 import time
-import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -21,6 +20,8 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
     # 估计器模型初始化
     if STATUS == 'PF' : 
         pf = est.Particle_Filter(ds, model.dim_obs, int(1e4), model.f, model.h, model.x0_mu, model.P0)
+    if 'RL' in STATUS:
+        agent.reset(args.x0_hat, args.P0_hat)
     # ----------
     # 生成多条测试轨迹
     for i in range(sim_num) : 
@@ -46,7 +47,7 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
             P_hat = args.P0_hat
             initial_x = [args.x0_hat]
             for t in t_seq : 
-                result = est.NLSF_uniform(args.P0_hat, y_seq=y_seq[:t+1], Q=model.Q, R=model.R, x0=initial_x, mode="quadratic", x0_bar=args.x0_hat)
+                result, _ = est.NLSF_uniform(inv(args.P0_hat), y_seq=y_seq[:t+1], Q=model.Q, R=model.R, x0=initial_x, mode="quadratic", x0_bar=args.x0_hat)
                 x_hat_seq.append(result[-ds:])
                 initial_x = list(result.reshape(-1,3))[1:]
             # end for t(step)
@@ -69,50 +70,12 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
                 P_hat = P_next_hat
             # end for t(step)
         elif 'RLF' in STATUS.upper() and 'MHE' in STATUS.upper() : # RL更新arrival cost的MHE
-            hidden = None
-            initial_x = [args.x0_hat]
-            y_list = []
             for t in t_seq : 
-                # 获取真实观测值
-                y_list.append(y_seq[t])
-                if len(y_list) > args.window : del y_list[0]
-                # ----------
-                if t < args.window -1 : # 窗口未满
-                    # 求解非线性最小二乘，得到 x_next_hat
-                    result, _ = est.NLSF_uniform(args.P0_hat, y_seq=y_list, Q=model.Q, R=model.R, mode="quadratic", x0=initial_x, x0_bar=args.x0_hat)
-                    x_next_hat = result[-ds: ]
-                    x_hat_seq.append(x_next_hat)
-                    initial_x = np.vsplit(result[:].reshape(-1,ds), 1)
-                    # ----------
-                elif t == args.window -1 : # 窗口刚满，arrival cost从0到1
-                    # 求解非线性最小二乘，得到 x_next_hat
-                    result, _ = est.NLSF_uniform(args.P0_hat, y_seq=y_list, Q=model.Q, R=model.R, mode="quadratic", x0=initial_x, x0_bar=args.x0_hat)
-                    x_next_hat = result[-ds: ]
-                    x_hat_seq.append(x_next_hat)
-                    initial_x = np.vsplit(result[ds: ].reshape(-1,ds), 1)
-                    # ----------
-                    # 基于 x_k|k 和 y_k+1 得到 L0_NLSF
-                    inputTensor = torch.FloatTensor(np.hstack((args.x0_hat, y_seq[t-args.window+1])), device=agent.device).reshape(1,1,-1)
-                    L0_NLSF, hidden = agent.policy.forward(input_seq=inputTensor, hidden=hidden, batch_size=1)
-                    L0_NLSF = L0_NLSF.squeeze().detach().cpu().numpy()
-                    # ----------
-                else : # 窗口已满，arrival cost从k到k+1
-                    # 求解非线性最小二乘，得到 x_next_hat
-                    result, _ = est.NLSF_uniform(L0_NLSF, y_seq=y_list, Q=model.Q, R=model.R, mode="sumofsquares", x0=initial_x)
-                    x_next_hat = result[-ds: ]
-                    x_hat_seq.append(x_next_hat)
-                    initial_x = np.vsplit(result[ds: ].reshape(-1,ds), 1)
-                    # ----------
-                    # 基于 x_k|k 和 y_k+1 得到 L0_NLSF
-                    inputTensor = torch.FloatTensor(np.hstack((x_hat_seq[t-args.window], y_seq[t-args.window+1])), device=agent.device).reshape(1,1,-1)
-                    L0_NLSF, hidden = agent.policy.forward(input_seq=inputTensor, hidden=hidden, batch_size=1)
-                    L0_NLSF = L0_NLSF.squeeze().detach().cpu().numpy()
-                    # ----------
-                # end if t(step)
-            # end for t(step)
+                x_next_hat, _ = agent.estimate(y_seq[t], model.Q, model.R)
+                x_hat_seq.append(x_next_hat)
         elif 'MHE' in STATUS.upper() : # 传统方法（EKF、UKF）更新arrival cost的MHE
             x0_NLSF = args.x0_hat
-            P0_NLSF = args.P0_hat
+            P_hat = args.P0_hat
             initial_x = [args.x0_hat]
             y_list = []
             for t in t_seq : 
@@ -121,26 +84,26 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
                 if len(y_list) > args.window : del y_list[0]
                 # ----------
                 # 求解非线性最小二乘，得到 x_next_hat
-                result, _ = est.NLSF_uniform(inv(P0_NLSF), y_seq=y_list, Q=model.Q, R=model.R, x0=initial_x, mode="quadratic", x0_bar=x0_NLSF)
+                result, _ = est.NLSF_uniform(inv(P_hat), y_seq=y_list, Q=model.Q, R=model.R, x0=initial_x, mode="quadratic", x0_bar=x0_NLSF)
                 x_next_hat = result[-ds: ]
                 x_hat_seq.append(x_next_hat)
                 # ----------
-                if t < args.window - 1 : # 窗口未满，x0_NLSF 和 P0_NLSF无需更新
+                if t < args.window - 1 : # 窗口未满，x0_NLSF 和 P_hat无需更新
                     initial_x = list(result.reshape(-1,3))
-                else : # 窗口已满，用不同的方法更新x0_NLSF 和 P0_NLSF
+                else : # 窗口已满，用不同的方法更新x0_NLSF 和 P_hat
                     initial_x = list(result.reshape(-1,3))[1:]
                     if 'EKF' in STATUS : 
                         # 09. Computing arrival cost parameters in moving horizon estimation using sampling based filters
                         F = model.F(model.f(x0_NLSF))
                         H = model.H(model.f(x0_NLSF))
-                        P0_NLSF = F@P0_NLSF@F.T + model.Q - F@P0_NLSF@H.T@ inv(H@P0_NLSF@H.T + model.R) @ H@P0_NLSF@F.T
+                        P_hat = F@P_hat@F.T + model.Q - F@P_hat@H.T@ inv(H@P_hat@H.T + model.R) @ H@P_hat@F.T
                         # ----------
-                        # _, P0_NLSF = est.EKF(x0_NLSF, P0_NLSF, y_seq[t-args.window+1], model.Q, model.R)
+                        # _, P_hat = est.EKF(x0_NLSF, P_hat, y_seq[t-args.window+1], model.Q, model.R)
                     if 'UKF' in STATUS : ## 尚未修改正确
-                        _, P0_NLSF = est.UKF(x0_NLSF, P0_NLSF, y_seq[t-args.window+1], model.Q, model.R)
+                        _, P_hat = est.UKF(x0_NLSF, P_hat, y_seq[t-args.window+1], model.Q, model.R)
                     x0_NLSF = x_hat_seq[t-args.window+1] # x_hat_k+1|k+1
                 # end if t(step)
-                P_hat_seq.append(P0_NLSF)
+                P_hat_seq.append(P_hat)
             #end for t(step)
         # end if STATUS
         # 单步估计所需平均cpu时间，单位ms
