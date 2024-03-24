@@ -229,6 +229,7 @@ def train(model:Model, agent:RL_estimator, args) -> None:
 # end function train
 
 def main():
+    # 加载相关参数
     args = def_param2()
     args.aver_num = 5
     args.train_window = 5
@@ -241,6 +242,7 @@ def main():
     model_paras_dict, estimator_paras_dict = set_params(args=args)
     model = create_model(**model_paras_dict)
     agent = RL_estimator(**estimator_paras_dict, STATUS='test')
+    # ----------
     # 策略网络初始化 
     x_hat_seq, y_seq, P_hat_seq = simulate(model, args, rand_seed=22222, STATUS='init')
     x_hat_seq = np.insert(x_hat_seq, 0, args.x0_hat, axis=0)
@@ -261,7 +263,6 @@ def main():
     loss.backward()
     grad_clipping(agent.policy, 10)
     optimizer.step()
-    del x_hat_seq, y_seq, P_hat_seq, 
     # ----------
     # 模型训练
     if 'RLF' in args.STATUS : train(model, agent, args)

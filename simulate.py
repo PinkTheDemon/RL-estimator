@@ -20,8 +20,6 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
     # 估计器模型初始化
     if STATUS == 'PF' : 
         pf = est.Particle_Filter(ds, model.dim_obs, int(1e4), model.f, model.h, model.x0_mu, model.P0)
-    if 'RL' in STATUS:
-        agent.reset(args.x0_hat, args.P0_hat)
     # ----------
     # 生成多条测试轨迹
     for i in range(sim_num) : 
@@ -70,8 +68,10 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
                 P_hat = P_next_hat
             # end for t(step)
         elif 'RLF' in STATUS.upper() and 'MHE' in STATUS.upper() : # RL更新arrival cost的MHE
+            agent.reset(args.x0_hat, args.P0_hat)
             for t in t_seq : 
-                x_next_hat, _ = agent.estimate(y_seq[t], model.Q, model.R)
+                agent.estimate(y_seq[t], model.Q, model.R)
+                x_next_hat = agent.x_hat
                 x_hat_seq.append(x_next_hat)
         elif 'MHE' in STATUS.upper() : # 传统方法（EKF、UKF）更新arrival cost的MHE
             x0_NLSF = args.x0_hat
