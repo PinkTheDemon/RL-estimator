@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 
 import estimator as est
 from model import create_model
-from def_param2 import def_param2
 from functions import inv, LogFile
+from def_param2 import def_param2, set_params
 
 def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', plot_flag=False, x_batch=None, y_batch=None) : 
     # 常用变量读取
@@ -166,7 +166,8 @@ if __name__ == "__main__" :
     test_option = ["EKF", "EKF-MHE"] # , "UKF", "UKF-MHE", "FIE"
     # ----------
     logfile = LogFile("output/test_results.txt", rename_option=True)
-    args, model_paras_dict, estimator_paras_dict = def_param2()
+    args = def_param2()
+    model_paras_dict, estimator_paras_dict = set_params(args)
     model = create_model(**model_paras_dict)
     print(f"x0_mu: {model.x0_mu}, x0_hat: {args.x0_hat}")
     print(f"P0_mu: {model.P0}")
