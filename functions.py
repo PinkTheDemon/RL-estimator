@@ -139,8 +139,8 @@ def cholesky_unique(A): # 半正定矩阵的cholesky分解之一（可能因为�
         L[0,0] = np.sqrt(A_temp[0,0])
 
         for i in range(1, L.shape[0]) : 
-            L[i:,i-1] = A_temp[i:,i-1]/L[i-1,i-1]
-            A_temp[i:,i:] = A_temp[i:,i:] - A_temp[i:,i-1].reshape(-1,1)@A_temp[i:,i-1].reshape(1,-1)/A_temp[i-1,i-1]
+            L[i:,i-1] = A_temp[i:,i-1]/(L[i-1,i-1]+1e-8)
+            A_temp[i:,i:] = A_temp[i:,i:] - A_temp[i:,i-1].reshape(-1,1)@A_temp[i:,i-1].reshape(1,-1)/(A_temp[i-1,i-1]+1e-8)
             L[i,i] = np.sqrt(A_temp[i,i])
 
         # if L.shape[0] > 1 : 
