@@ -17,13 +17,13 @@ class Model() :
         self.f_real = f if f_real is None else f_real
         self.h_real = h if h_real is None else h_real
 
-    def step(self, x, disturb=None, noise=None) : 
-        x_next = self.f(x, disturb)
+    def step(self, x, u=None, disturb=None, noise=None) : 
+        x_next = self.f(x, u=u, disturb=disturb)
         y_next = self.h(x_next, noise)
         return x_next, y_next
     
-    def step_real(self, x, disturb=None, noise=None) : 
-        x_next = self.f_real(x, disturb)
+    def step_real(self, x, u=None, disturb=None, noise=None) : 
+        x_next = self.f_real(x, u=u, disturb=disturb)
         y_next = self.h_real(x_next, noise)
         return x_next, y_next
     
@@ -55,9 +55,9 @@ class Model() :
         x = initial_state
         for t in t_seq : # 真实轨迹
             if is_mismatch : 
-                x_next, y_next = dyn.step_real(x, disturb_list[t], noise_list[t])
+                x_next, y_next = self.step_real(x, disturb=disturb_list[t], noise=noise_list[t])
             else : 
-                x_next, y_next = dyn.step(x, disturb_list[t], noise_list[t])
+                x_next, y_next = self.step(x, disturb=disturb_list[t], noise=noise_list[t])
             x = x_next
             x_seq.append(x_next)
             y_seq.append(y_next)

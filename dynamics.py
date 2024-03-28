@@ -117,13 +117,13 @@ def h_real(x, noise=None, batch_first:bool=True) :
     return y
 
 # system dynamics
-def step(x, disturb=None, noise=None) : 
-    x_next = f(x, disturb)
+def step(x, u=None, disturb=None, noise=None) : 
+    x_next = f(x, u=u, disturb=disturb)
     y_next = h(x_next, noise)
     return x_next, y_next
 
-def step_real(x, disturb=None, noise=None) : 
-    x_next = f_real(x, disturb)
+def step_real(x, u=None, disturb=None, noise=None) : 
+    x_next = f_real(x, u=u, disturb=disturb)
     y_next = h_real(x_next, noise)
     return x_next, y_next
 
