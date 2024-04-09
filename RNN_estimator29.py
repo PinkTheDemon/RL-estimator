@@ -79,7 +79,7 @@ class ActorRNN(nn.Module):
         for fc1 in self.fc1 : 
             output = fc1(output)
         output, hidden = self.rnn(output, hidden)
-        output = torch.tanh(output)
+        # output = torch.tanh(output) ## rnn内部有tanh激活函数，所以不需要再次加tanh
         for fc2 in self.fc2 : 
             output = fc2(output)
         #endregion
@@ -110,7 +110,7 @@ def grad_clipping(net, theta) -> None:
 # end function grad_clipping
 
 class RL_estimator():
-    def __init__(self, dim_state, dim_obs, lr, lr_min, rnn_params_dict, device='cpu', STATUS='train') -> None:
+    def __init__(self, dim_state, dim_obs, lr, lr_min, rnn_params_dict, device='cpu') -> None:
         self.dim_state = dim_state
         self.dim_input = dim_state + dim_obs
         self.dim_output = ds2do(dim_state)
@@ -118,7 +118,6 @@ class RL_estimator():
         self.policy = ActorRNN(dim_input=self.dim_input, dim_output=self.dim_output, **rnn_params_dict).to(self.device)
         self.optimizer = Adam(self.policy.parameters(), lr=lr)
         self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=50, factor=0.5, min_lr=lr_min, verbose=True)
-        self.STATUS = STATUS
     # end function __init__
     def reset(self, x0_hat, P0_hat) -> None:
         self.x_hat = x0_hat
@@ -127,11 +126,12 @@ class RL_estimator():
         self.hidden = None
     # end function reset
     def estimate(self, y, Q, R):
-        result, _ = est.NLSF_uniform(self.P_inv.detach().squeeze().cpu().numpy(), y_seq=[y], Q=Q, R=R, mode="quadratic", x0=[self.x_hat], x0_bar=self.x_hat)
+        result = est.NLSF_uniform(self.P_inv.detach().squeeze().cpu().numpy(), y_seq=[y], Q=Q, R=R, mode="quadratic", x0=[self.x_hat], x0_bar=self.x_hat)
+        self.status = result.status
         input = np.tile(np.hstack((self.x_hat, y)), (1,1,1))
         input = torch.from_numpy(input).float().to(self.device)
         self.P_inv, h, self.hidden = self.policy.forward(input, self.hidden)
-        self.x_hat = result[-self.dim_state: ]
+        self.x_hat = result.x[-self.dim_state: ]
         return self.x_hat, self.P_inv, h
     # end function estimate
     def value(self, x, x_bar, P_inv, h=None):
@@ -145,6 +145,7 @@ class RL_estimator():
         baseName, _ = os.path.splitext(fileName)
         torch.save(self.optimizer.state_dict(), baseName+".opt")
         torch.save(self.scheduler.state_dict(), baseName+".sch")
+        print(f"save model at {fileName}")
     # end function save_model
     def load_model(self, fileName) -> None:
         self.policy.load_state_dict(torch.load(fileName))
@@ -169,6 +170,7 @@ def train(model:Model, agent:RL_estimator, args) -> None:
         x_hat_seq = []
         P_inv_seq = []
         y_list = []
+        h = torch.Tensor([0])
         targetQ_seq = []
         Q_seq = []
         for t in range(args.max_train_steps) : 
@@ -187,18 +189,20 @@ def train(model:Model, agent:RL_estimator, args) -> None:
             for _ in range(args.aver_num) : 
                 x_next_noise = x_next_hat + np.random.multivariate_normal(np.zeros((model.dim_state, )), args.explore_Cov)
                 if t < args.train_window : # 窗口未满或刚满，窗口初始为args.x0_hat
-                    _, min_value = est.NLSF_uniform(inv(args.P0_hat), y_seq=y_list[ :-1], Q=model.Q, R=model.R, mode="quadratic-end", 
+                    result = est.NLSF_uniform(inv(args.P0_hat), y_seq=y_list[ :-1], Q=model.Q, R=model.R, mode="quadratic-end", 
                                                     x0=[args.x0_hat]+x_hat_seq[:-1], x0_bar=args.x0_hat, xend=x_next_noise)
                 else : # 窗口已满，窗口初始为x_hat_seq[t-args.train_window]
-                    _, min_value = est.NLSF_uniform(P_inv_seq[t-args.train_window], y_seq=y_list[ :-1], Q=model.Q, R=model.R, mode="quadratic-end", 
+                    result = est.NLSF_uniform(P_inv_seq[t-args.train_window], y_seq=y_list[ :-1], Q=model.Q, R=model.R, mode="quadratic-end", 
                                                     x0=x_hat_seq[t-args.train_window:-1], x0_bar=x_hat_seq[t-args.train_window], xend=x_next_noise)
                 # end if t(step)
-                targetQ = min_value@min_value + (y_list[-1] - model.h(x_next_noise))@inv(model.R)@(y_list[-1] - model.h(x_next_noise))
+                min_fun_value = result.fun
+                targetQ = min_fun_value@min_fun_value + (y_list[-1] - model.h(x_next_noise))@inv(model.R)@(y_list[-1] - model.h(x_next_noise)) + h.item()
                 Q = agent.value(x=x_next_noise, x_bar=x_next_hat, P_inv=P_inv_next, h=h_next)
                 targetQ_list.append(targetQ)
                 Q_list.append(Q)
             targetQ_seq.append(targetQ_list)
             Q_seq.append(Q_list)
+            h = h_next
             #endregion
         # end for t(step)
         #endregion 状态估计
@@ -223,9 +227,12 @@ def train(model:Model, agent:RL_estimator, args) -> None:
         #region 学习率更新
         agent.scheduler.step(loss) ## RMSE
         #endregion
+        #region 保存学习过程中loss最低的模型
+        if len(loss_seq) < 2 or loss.item() < min(loss_seq[:-1]) : 
+            agent.save_model(args.model_file)
+        #endregion
     # end for i(episode)
     #region 保存网络参数文件，以及打印相关参数，绘制损失曲线
-    args.modelend_file = checkFilename("output/modelend.mdl")
     agent.save_model(args.modelend_file)
     for key, value in vars(args).items() : 
         print(f"{key}: {value}")
@@ -234,25 +241,27 @@ def train(model:Model, agent:RL_estimator, args) -> None:
     print(f"weight_decay: {agent.optimizer.param_groups[0]['weight_decay']}")
     log_file.flush()
     log_file.endLog()
-    plotReward(loss_seq, filename="picture/train_reward.png")
+    plotReward(loss_seq, filename="picture/train_loss.png")
     #endregion
 # end function train
 
 def main():
     #region 加载相关参数
     args = def_param2()
-    args.aver_num = 5
+    args.aver_num = 5 # 有提升但提升不大，或许最后可以靠这个提高一点点性能
     args.train_window = 1
-    # args.max_episodes = 10000
+    args.max_episodes = 5000
     args.output_file = "output/log29.txt"
+    args.model_file = checkFilename("output/model.mdl")
+    args.modelend_file = checkFilename("output/modelend.mdl")
     args.rename_option = True
     args.STATUS = "RLF-MHE"
-    args.hidden_layer = ([64], 32, [128])
+    args.hidden_layer = ([256], 64, [64])
     print("simulate method: ", args.STATUS)
     print("hidden_layer: ", args.hidden_layer)
     model_paras_dict, estimator_paras_dict = set_params(args=args)
     model = create_model(**model_paras_dict)
-    agent = RL_estimator(**estimator_paras_dict, STATUS='test')
+    agent = RL_estimator(**estimator_paras_dict)
     #endregion
     #region 策略网络初始化 
     x_hat_seq, y_seq, P_hat_seq = simulate(model, args, rand_seed=22222, STATUS='init')
@@ -279,7 +288,7 @@ def main():
     if 'RLF' in args.STATUS : train(model, agent, args)
     #endregion
     #region 加载模型（不训练时才需要加载）
-    # agent.load_model("output/modelend(2).mdl")
+    # agent.load_model("output/modelend(256 64 64).mdl")
     #endregion
     #region 测试
     simulate(model, args, agent, sim_num=50, rand_seed=10086, STATUS=args.STATUS)

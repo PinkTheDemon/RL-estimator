@@ -99,7 +99,7 @@ def NLSF_uniform(P_inv, y_seq, Q, R, mode:str="quadratic", x0=None, **args) :
             x0.append(dyn.f(x0[-1]))
         x0 = np.array(x0).reshape(-1)
     result = least_squares(fun.res_fun, x0, method='lm', jac=fun.jac_fun, args=params) # , max_nfev=8
-    return result.x, result.fun
+    return result
 
 class SumOfSquares() : 
     def __init__(self) -> None:

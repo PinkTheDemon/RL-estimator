@@ -6,6 +6,7 @@ import estimator as est
 from model import create_model
 from functions import inv, LogFile
 from def_param2 import def_param2, set_params
+from plot import plotTrajectory
 
 def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', plot_flag=False, x_batch=None, y_batch=None) : 
     #region 常用变量读取
@@ -15,7 +16,7 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
     MSE_avg = 0
     RMSE_avg = 0
     execution_time = 0
-    error = np.zeros((args.max_sim_steps,ds)) # 可能需要绘制均值和方差大小，保存的话，可能batch×steps×ds
+    count = 0
     #endregion
     #region 估计器模型初始化
     if STATUS == 'PF' : 
@@ -24,8 +25,7 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
     #region 生成多条测试轨迹
     for i in range(sim_num) : 
         #region 设置随机数种子
-        # rand_seed += 1
-        np.random.seed(rand_seed)
+        np.random.seed(rand_seed+i)
         #endregion
         #region 获取一条测试轨迹
         t_seq = range(args.max_sim_steps)
@@ -33,11 +33,7 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
             x_seq = x_batch[i]
             y_seq = y_batch[i]
         else : 
-            x_seq, y_seq = model.generate_data(args.max_sim_steps, is_mismatch=args.MODEL_MISMATCH, rand_seed=rand_seed)
-            rand_seed += 1
-            while (x_seq[0][1] <= 0) : 
-                x_seq, y_seq = model.generate_data(args.max_sim_steps, is_mismatch=args.MODEL_MISMATCH, rand_seed=rand_seed)
-                rand_seed += 1
+            x_seq, y_seq = model.generate_data(args.max_sim_steps, is_mismatch=args.MODEL_MISMATCH, rand_seed=rand_seed+i)
         #endregion
         #region 记录一条轨迹状态估计所需的cpu时间开始点
         start_time = time.process_time()
@@ -49,11 +45,14 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
             x_hat = args.x0_hat
             P_hat = args.P0_hat
             initial_x = [args.x0_hat]
+            # status_seq = [] # debug
             for t in t_seq : 
-                result, _ = est.NLSF_uniform(inv(args.P0_hat), y_seq=y_seq[:t+1], Q=model.Q, R=model.R, x0=initial_x, mode="quadratic", x0_bar=args.x0_hat)
-                x_hat_seq.append(result[-ds:])
-                initial_x = list(result.reshape(-1,3))[1:]
+                result = est.NLSF_uniform(inv(args.P0_hat), y_seq=y_seq[:t+1], Q=model.Q, R=model.R, x0=initial_x, mode="quadratic", x0_bar=args.x0_hat)
+                x_hat_seq.append(result.x[-ds:])
+                # status_seq.append(result.status) # debug
+                initial_x = list(result.x.reshape(-1,3))[1:]
             # end for t(step)
+            # print(f"status seq: {status_seq}") # debug
         elif 'MHE' not in STATUS.upper() : # 单步状态估计，EKF、UKF、PF
             x_hat = args.x0_hat
             P_hat = args.P0_hat
@@ -74,29 +73,34 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
             # end for t(step)
         elif 'RLF' in STATUS.upper() and 'MHE' in STATUS.upper() : # RL更新arrival cost的MHE
             agent.reset(args.x0_hat, args.P0_hat)
+            # status_seq = [] # debug
             for t in t_seq : 
                 agent.estimate(y_seq[t], model.Q, model.R)
                 x_next_hat = agent.x_hat
                 x_hat_seq.append(x_next_hat)
+                # status_seq.append(agent.sol_status) # debug
+            # print(f"status seq: {status_seq}") # debug
         elif 'MHE' in STATUS.upper() : # 传统方法（EKF、UKF）更新arrival cost的MHE
             x0_NLSF = args.x0_hat
             P_hat = args.P0_hat
             initial_x = [args.x0_hat]
             y_list = []
+            # status_seq = [] # debug
             for t in t_seq : 
                 #region 获取真实观测值
                 y_list.append(y_seq[t])
                 if len(y_list) > args.window : del y_list[0]
                 #endregion
                 #region 求解非线性最小二乘，得到 x_next_hat
-                result, _ = est.NLSF_uniform(inv(P_hat), y_seq=y_list, Q=model.Q, R=model.R, x0=initial_x, mode="quadratic", x0_bar=x0_NLSF)
-                x_next_hat = result[-ds: ]
+                result = est.NLSF_uniform(inv(P_hat), y_seq=y_list, Q=model.Q, R=model.R, x0=initial_x, mode="quadratic", x0_bar=x0_NLSF)
+                # status_seq.append(result.status) # debug
+                x_next_hat = result.x[-ds: ]
                 x_hat_seq.append(x_next_hat)
                 #endregion
                 if t < args.window - 1 : # 窗口未满，x0_NLSF 和 P_hat无需更新
-                    initial_x = list(result.reshape(-1,3))
+                    initial_x = list(result.x.reshape(-1,3))
                 else : # 窗口已满，用不同的方法更新x0_NLSF 和 P_hat
-                    initial_x = list(result.reshape(-1,3))[1:]
+                    initial_x = list(result.x.reshape(-1,3))[1:]
                     if 'EKF' in STATUS : 
                         #region 09. Computing arrival cost parameters in moving horizon estimation using sampling based filters
                         F = model.F(model.f(x0_NLSF))
@@ -110,6 +114,7 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
                 # end if t(step)
                 P_hat_seq.append(P_hat)
             #end for t(step)
+            # print(f"status seq: {status_seq}") # debug
         # end if STATUS
         #region 单步估计所需平均cpu时间，单位ms
         end_time = time.process_time()
@@ -118,11 +123,13 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
         #region 计算MSE指标
         x_seq = np.array(x_seq)
         x_hat_seq = np.array(x_hat_seq)
-        error += np.abs(x_seq - x_hat_seq) / sim_num
         MSE = np.square(x_seq - x_hat_seq).sum(0) / args.max_sim_steps
         RMSE = np.sqrt(np.mean(MSE))
         MSE_avg += MSE / sim_num
         RMSE_avg += RMSE / sim_num
+        #endregion
+        #region 统计RMSE大于4的数量
+        if RMSE > 4 : count += 1
         #endregion
     # end for i(sim_num)
     # 结果输出或绘制
@@ -132,46 +139,11 @@ def simulate(model, args, agent=None, sim_num=1, rand_seed=1111, STATUS='EKF', p
         #region 打印MSE和时间指标
         print(f"MSE of {STATUS.upper()}: {MSE_avg}, RMSE: {RMSE_avg}")
         print(f"average cpu time of {STATUS.upper()}: {execution_time} ms")
+        print(f"mismatch number of {STATUS.upper()}: {count}")
         #endregion
         #region 绘图
         if plot_flag : 
-            plt.rcParams['font.sans-serif'] = ['SimHei']
-            plt.rcParams['axes.unicode_minus'] = False 
-            plt.rcParams['font.size'] = 28
-            fig, axs = plt.subplots(ds,1)
-            for i in range(ds) : 
-                axs[i].plot(t_seq, x_seq[:,i], label='x_real', color='blue')
-                axs[i].plot(t_seq, x_hat_seq[:,i], label='x_hat', color='red')
-                axs[i].set_xlim(0, args.max_sim_steps)
-                axs[i].set_ylabel(f'x{i+1}')
-            # axs[0].set_title(f'{STATUS}')
-            axs[0].set_title('状态估计效果图')
-            axs[0].legend()
-            axs[-1].set_xlabel('时间步')
-
-            fig, ax = plt.subplots()
-            color = ['b','g','r','c','m','y','k']
-            for i in range(ds) : 
-                ax.plot(t_seq, error[:,i], label=f'x{i+1}', color=color[i], linestyle='--')
-                ax.plot(t_seq, np.average(error[:,i])*np.ones_like(t_seq), color=color[i])
-            ax.set_xlim(0, args.max_sim_steps)
-            ax.set_xlabel('时间步')
-            ax.set_ylabel('绝对值误差')
-            # ax.set_title(f'MSE = {MSE}')
-            ax.set_title('绝对值误差')
-            ax.legend()
-
-            fig = plt.figure()
-            ax = plt.axes(projection='3d')
-            ax.plot3D(x_seq[:,0], x_seq[:,1], x_seq[:,2], label='x_real', color='blue')
-            ax.scatter(*x_seq[0], marker='o', color='blue')
-            ax.plot3D(x_hat_seq[:,0], x_hat_seq[:,1], x_hat_seq[:,2], label='x_hat', color='red')
-            ax.scatter(*x_hat_seq[0], marker='o', color='red')
-            ax.set_xlabel('x1')
-            ax.set_ylabel('x2')
-            ax.set_zlabel('x3')
-            ax.legend()
-            ax.set_title('状态轨迹')
+            plotTrajectory(x_seq=x_seq, x_hat_seq=x_hat_seq, STATUS=STATUS)
             plt.show()
         #endregion
     # end if STATUS(== INIT)
@@ -190,9 +162,9 @@ if __name__ == "__main__" :
     print(f"x0_mu: {model.x0_mu}, x0_hat: {args.x0_hat}")
     print(f"P0_mu: {model.P0}")
     print(f"P0_hat: {args.P0_hat}")
-    # print(f"Q: {model.Q}")
+    print(f"Q: {model.Q}")
     # print(f"Q_hat: {args.Q_hat}")
-    # print(f"R: {model.R}")
+    print(f"R: {model.R}")
     # print(f"R_hat: {args.R_hat}")
     print("********************")
     #endregion
