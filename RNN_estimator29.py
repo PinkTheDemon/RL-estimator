@@ -321,11 +321,11 @@ def main():
     #region 测试的模型和参数
     model = getModel(modelName="Continuous1")
     steps = 100
-    episodes = 100
+    episodes = 50
     randSeed = 10086
-    initsteps = 100
-    initepisodes = 500
-    initrandSeed = 22222
+    initsteps = 100 # 初始化网络用的
+    initepisodes = 500 # 初始化网络用的
+    initrandSeed = 22222 # 初始化网络用的
     args = pm.parseParams()
     estParams = pm.getEstParams(modelName=model.name)
     trainParams = pm.getTrainParams(estorName="RL_estimator", cov=args.cov, gamma=args.gamma)

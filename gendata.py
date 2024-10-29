@@ -94,4 +94,4 @@ def getData(modelName, steps, episodes, randSeed):
     return x_batch, y_batch
 
 if __name__ == "__main__":
-    generate_trajectories(modelName="Augment2", steps=100, episodes=100, randSeed=10086)
+    generate_trajectories(modelName="Continuous1", steps=100, episodes=50, randSeed=10086)
