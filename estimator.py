@@ -95,15 +95,17 @@ class MHE(Estimator):
                               mode="quadratic", x0=self.x0_bar_seq[:], x0_bar=self.x0_bar_seq[0])
         self.x_hat = result.x[-self.dim_state:]
         self.y_hat = self.h_fn(x=self.x_hat)
-        # EKF方法更新P
-        x0_hat = self.x0_bar_seq[0]
-        x1_pre = self.f_fn(x=x0_hat) # 先不加u了很麻烦，有u的话再说吧
-        F = self.F_fn(x=x0_hat)
-        P_pre = F@self.P_hat@F.T + Q
-        H = self.H_fn(x=x1_pre)
-        self.P_hat = P_pre - P_pre@H.T@inv(R+H@P_pre@H.T)@H@P_pre
+        # EKF方法更新P(直观解释：x0被删去的时候才需要更新P)
+        if len(self.x0_bar_seq) == self.window: 
+            x0_hat = self.x0_bar_seq[0]
+            x1_pre = self.f_fn(x=x0_hat) # 先不加u了很麻烦，有u的话再说吧
+            F = self.F_fn(x=x0_hat)
+            P_pre = F@self.P_hat@F.T + Q
+            H = self.H_fn(x=x1_pre)
+            self.P_hat = P_pre - P_pre@H.T@inv(R+H@P_pre@H.T)@H@P_pre
         # 更新x0_bar_seq
-        self.x0_bar_seq = list(result.x.reshape(-1, self.dim_state))
+        # self.x0_bar_seq = list(result.x.reshape(-1, self.dim_state)) # 要用新的就都用新的
+        self.x0_bar_seq.append(self.x_hat) # 要不用新的就都不用新的，训练的时候是不用新的所以测试也不应该用新的
         if len(self.x0_bar_seq) > self.window : del self.x0_bar_seq[0]
 
 # def IEKF(x, P, y_next, Q, R, times=10):
