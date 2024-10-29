@@ -1,0 +1,10 @@
+# 非英文字母开头的文件
+[!.a-zA-Z]*
+# 测试代码的文件
+try.py
+# 文件夹
+/data
+/output
+/picture
+/text
+/net
