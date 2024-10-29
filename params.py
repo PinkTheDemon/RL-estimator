@@ -6,7 +6,9 @@ def parseParams():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cov", type=str, default="1e-4") # 希望它长什么样就输入什么就行
     parser.add_argument("--gamma", type=float, default=0.9)
-    parser.add_argument("--hidden_layer", default=([256], 32, [256]), help="hidden layers of NN")
+    parser.add_argument("--hidden_layer", default=([256], 32, [256]))
+    parser.add_argument("--dropout", type=float, default=0, help="no effect when num_layer=1")
+    parser.add_argument("--num_layer", type=int, default=1)
     args = parser.parse_args()
     args.cov = eval(args.cov)
     if isinstance(args.hidden_layer, str) : args.hidden_layer = eval(args.hidden_layer)

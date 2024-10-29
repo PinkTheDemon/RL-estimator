@@ -329,23 +329,23 @@ def main():
     args = pm.parseParams()
     estParams = pm.getEstParams(modelName=model.name)
     trainParams = pm.getTrainParams(estorName="RL_estimator", cov=args.cov, gamma=args.gamma)
-    nnParams = pm.getNNParams(netName="ActorRNN", hidden_layer=args.hidden_layer)
+    nnParams = pm.getNNParams(netName="ActorRNN", hidden_layer=args.hidden_layer, dropout=args.dropout, num_rnn_layers=args.num_layer)
     #endregion
     #region 修改参数以便人工测试（自动测试时注释掉，否则参数无法自动变化）
-    args.hidden_layer = ([64], 32, [64])
-    trainParams["lr"] = 5e-4
-    trainParams["lr_min"] = 1e-6
-    nnParams["dropout"] = 0
-    nnParams["num_rnn_layers"] = 1
-    nnParams["type_activate"] = "relu"
-    nnParams["type_rnn"] = "gru"
+    # trainParams["lr"] = 5e-4
+    # trainParams["lr_min"] = 1e-6
+    # nnParams["hidden_layer"] = ([64], 32, [64])
+    # nnParams["dropout"] = 0
+    # nnParams["num_rnn_layers"] = 1
+    # nnParams["type_activate"] = "relu"
+    # nnParams["type_rnn"] = "gru"
     #endregion
     # 定义估计器类
     agent = RL_estimator(model=model, lr=trainParams["lr"], lr_min=trainParams["lr_min"], nnParams=nnParams, 
                          gamma=args.gamma, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
     #region 策略网络初始化
     initNetName = f"net/{nnParams['type_rnn']}_{nnParams['type_activate']}_dropout{nnParams['dropout']}_layer{nnParams['num_rnn_layers']}_"\
-                  f"steps{initsteps}_epis{initepisodes}_randseed{initrandSeed}.mdl"
+                  f"{args.hidden_layer}_steps{initsteps}_epis{initepisodes}_randseed{initrandSeed}.mdl"
     if os.path.exists(initNetName):
         agent.policy.load_state_dict(torch.load(initNetName))
     else :
