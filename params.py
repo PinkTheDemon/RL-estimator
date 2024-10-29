@@ -5,9 +5,11 @@ import numpy as np
 def parseParams():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cov", type=str, default="1e-4") # 希望它长什么样就输入什么就行
-    parser.add_argument("--goodInit", type=bool, default=False) # ""或不指定表示False，其他都是True
-    parser.add_argument("--gamma", type=float, default=0.4)
+    parser.add_argument("--gamma", type=float, default=0.9)
+    parser.add_argument("--hidden_layer", default=([256], 32, [256]), help="hidden layers of NN")
     args = parser.parse_args()
+    args.cov = eval(args.cov)
+    if isinstance(args.hidden_layer, str) : args.hidden_layer = eval(args.hidden_layer)
     return args
 
 # 仅用于生成数据
@@ -35,7 +37,7 @@ def getModelParams(modelName):
     return modelParams
 
 # 状态估计的初始参数
-def getEstParams(modelName, **args):
+def getEstParams(modelName, **kwargs):
     if modelName == "Discrete1":
         estParams = {
             "x0_hat": np.array([0, 0]),
@@ -50,16 +52,35 @@ def getEstParams(modelName, **args):
             "Q": np.diag((1e-2, 1e-2, 1e-2)),
             "R": np.diag((1e-2, 1e-2)),
         }
-    estParams |= args
+    estParams |= kwargs
     return estParams
 
-def getTrainParams(estorName, **args):
-    if estorName == "RL_Observer":
+def getTrainParams(estorName, **kwargs):
+    if estorName == "RL_estimator":
         trainParams = {
-            "trainEpis": 100,
-            "steps": 30,
-            "episodes": 50,
+            "steps": 100,
+            "episodes": 500,
             "randSeed": 0,
+            "lr": 5e-4,
+            "lr_min": 1e-6,
+            "train_window": 5,
+            "aver_num": 50,
+            "seq_len": 10,
+            "saveFile": "net/RNN_net", #base name without suffix
         }
-    trainParams |= args
+    trainParams |= kwargs
     return trainParams
+
+def getNNParams(netName, hidden_layer, **kwargs):
+    if netName == "ActorRNN":
+        nnParams = {
+            "dim_fc1": hidden_layer[0],
+            "dim_fc2": hidden_layer[2],
+            "type_activate": 'relu',
+            "type_rnn": 'gru',
+            "dim_rnn_hidden": hidden_layer[1],
+            "num_rnn_layers": 1,
+            "rand_seed": 111,
+        }
+    nnParams |= kwargs
+    return nnParams

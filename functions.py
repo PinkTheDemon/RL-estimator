@@ -63,15 +63,22 @@ def do2ds(dim_output:int) :
     return int(np.sqrt(2*(dim_output-1)))
 
 
-def checkFilename(filename:str) -> str : 
-    baseName, extension = os.path.splitext(filename)
+def checkFilename(filename:str, suffix:str=None) -> str : 
+    if suffix is None:
+        baseName, extension = os.path.splitext(filename)
+    else :
+        baseName = filename
+        extension = suffix
     index = 1
     while (os.path.exists(filename)) : 
         # 如果文件存在，自动更名
         filename = f'{baseName}({index}){extension}'
         index += 1
-    return filename
-
+    if suffix is None :
+        return filename
+    else :
+        baseName, _ = os.path.splitext(filename)
+        return baseName
 
 class LogFile() : 
     def __init__(self, fileName='output/log.txt', rename_option=False) -> None:

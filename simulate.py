@@ -69,9 +69,9 @@ if __name__ == "__main__" :
     randSeed = 10086
     modelErr = False
     isPrint = True
-    isPlot = True
+    isPlot = False
     # 选择执行测试的方法
-    test_options = ["EKF"] # , "UKF", "UKF-MHE", "FIE", "IEKF", "EKF-MHE"
+    test_options = ["EKF", "EKF-MHE"] # , "UKF", "UKF-MHE", "FIE", "IEKF"
     # 生成数据以及参数
     x_batch, y_batch = getData(modelName=model.name, steps=steps, episodes=episodes, randSeed=randSeed)
     modelParams = getModelParams(modelName=model.name)
@@ -89,20 +89,22 @@ if __name__ == "__main__" :
     #endregion
     #region 测试
     for status in test_options:
-        if "MHE" in status.upper():
+        print(f"{status.upper()}:", flush=True)
+        if status.upper() == "EKF-MHE":
             for i in range(1,10):
                 estParams["window"] = i
-                print("EKF-MHE, window length:", estParams["window"])
+                print("window length:", estParams["window"])
                 logfile.flush()
-                simulate(model=model, args=None, agent=None, sim_num=50, rand_seed=10086, STATUS=status, x_batch=x_batch, y_batch=y_batch, plot_flag=False)
+                # 生成EKF-MHE类
+                f, h, F, H = getSysFuns(model=model, modelErr=estParams["modelErr"])
+                agent = est.MHE(f_fn=f, h_fn=h, F_fn=F, H_fn=H, window=estParams["window"])
+                simulate(agent=agent, estParams=estParams, x_batch=x_batch, y_batch=y_batch, isPrint=isPrint, isPlot=isPlot)
                 print("********************")
-        else :
-            print(f"{status.upper()}:", flush=True)
+        elif status.upper() == "EKF":
             # 生成EKF类
             f, h, F, H = getSysFuns(model=model, modelErr=estParams["modelErr"])
-            ekf = est.EKF(f_fn=f, h_fn=h, F_fn=F, H_fn=H)
-            simulate(agent=ekf, estParams=estParams, x_batch=x_batch, y_batch=y_batch, isPrint=isPrint, isPlot=isPlot)
+            agent = est.EKF(f_fn=f, h_fn=h, F_fn=F, H_fn=H)
+            simulate(agent=agent, estParams=estParams, x_batch=x_batch, y_batch=y_batch, isPrint=isPrint, isPlot=isPlot)
             print("********************")
-    logfile.flush()
     logfile.endLog()
     #endregion

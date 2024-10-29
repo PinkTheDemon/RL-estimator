@@ -72,15 +72,39 @@ class EKF(Estimator):
             self.x_hat[1] = 0
 
 class MHE(Estimator):
-    def __init__(self, f_fn, h_fn, F_fn, H_fn, x0_hat=None, P0_hat=None) -> None:
+    def __init__(self, f_fn, h_fn, F_fn, H_fn, window, x0_hat=None, P0_hat=None) -> None:
         self.f_fn = f_fn
         self.h_fn = h_fn
         self.F_fn = F_fn
         self.H_fn = H_fn
+        self.window = window
         super().__init__(name="MHE", x0_hat=x0_hat, P0_hat=P0_hat)
 
-    def estimate(self, x0, P0, y_list, Q, R):
-        pass
+    def reset(self, x0_hat=None, P0_hat=None):
+        self.x_hat = x0_hat
+        if x0_hat is not None : self.dim_state = x0_hat.size
+        self.P_hat = P0_hat
+        self.y_seq = []
+        self.x0_bar_seq = [x0_hat]
+
+    def estimate(self, y, Q, R, u=None, P_inv=None):
+        self.y_seq.append(y)
+        if len(self.y_seq) > self.window : del self.y_seq[0]
+        if P_inv is None : P_inv = inv(self.P_hat)
+        result = NLSF_uniform(P_inv=P_inv, y_seq=self.y_seq, Q=Q, R=R, f=self.f_fn, h=self.h_fn, F=self.F_fn, H=self.H_fn, 
+                              mode="quadratic", x0=self.x0_bar_seq[:], x0_bar=self.x0_bar_seq[0])
+        self.x_hat = result.x[-self.dim_state:]
+        self.y_hat = self.h_fn(x=self.x_hat)
+        # EKF方法更新P
+        x0_hat = self.x0_bar_seq[0]
+        x1_pre = self.f_fn(x=x0_hat) # 先不加u了很麻烦，有u的话再说吧
+        F = self.F_fn(x=x0_hat)
+        P_pre = F@self.P_hat@F.T + Q
+        H = self.H_fn(x=x1_pre)
+        self.P_hat = P_pre - P_pre@H.T@inv(R+H@P_pre@H.T)@H@P_pre
+        # 更新x0_bar_seq
+        self.x0_bar_seq = list(result.x.reshape(-1, self.dim_state))
+        if len(self.x0_bar_seq) > self.window : del self.x0_bar_seq[0]
 
 # def IEKF(x, P, y_next, Q, R, times=10):
 #     # predict
@@ -157,114 +181,120 @@ class MHE(Estimator):
 #     return x_next_hat.reshape(-1), P_next_hat
 
 
-# def NLSF_uniform(P_inv, y_seq, Q, R, mode:str="quadratic", x0=None, **args) : 
-#     if "sumofsquares" in mode.lower() : 
-#         fun = SumOfSquares()
-#         params = [P_inv, y_seq, Q, R]
-#     elif "quadratic" in mode.lower() : 
-#         fun = Quadratic()
-#         params = [P_inv, y_seq, Q, R, args["x0_bar"]]
+def NLSF_uniform(P_inv, y_seq, Q, R, f, h, F, H, mode:str="quadratic", x0=None, **args) : 
+    if "sumofsquares" in mode.lower() : 
+        fun = SumOfSquares(f_fn=f, h_fn=h, F_fn=F, H_fn=H)
+        params = [P_inv, y_seq, Q, R]
+    elif "quadratic" in mode.lower() : 
+        fun = Quadratic(f_fn=f, h_fn=h, F_fn=F, H_fn=H)
+        params = [P_inv, y_seq, Q, R, args["x0_bar"]]
 
-#     if "gamma" in args.keys() : params.append(args["gamma"])
-#     if "end" in mode.lower() : params.append(args["xend"])
+    if "gamma" in args.keys() : params.append(args["gamma"])
+    if "end" in mode.lower() : params.append(args["xend"])
 
-#     ds = Q.shape[0]
-#     if x0 is None : 
-#         x0 = np.zeros((ds*(len(y_seq)+1), ))
-#     else : 
-#         while (len(x0) <= len(y_seq)) : 
-#             x0.append(dyn.f(x0[-1]))
-#         x0 = np.array(x0).reshape(-1)
-#     result = least_squares(fun.res_fun, x0, method='lm', jac=fun.jac_fun, args=params) # , max_nfev=8
-#     return result
+    ds = Q.shape[0]
+    if x0 is None : 
+        x0 = np.zeros((ds*(len(y_seq)+1), ))
+    else : 
+        while (len(x0) <= len(y_seq)) : 
+            x0.append(f(x0[-1]))
+        x0 = np.array(x0).reshape(-1)
+    result = least_squares(fun.res_fun, x0, method='lm', jac=fun.jac_fun, args=params) # , max_nfev=8
+    return result
 
-# class SumOfSquares() : 
-#     def __init__(self) -> None:
-#         pass
+class SumOfSquares() : 
+    def __init__(self, f_fn, h_fn, F_fn, H_fn) -> None:
+        self.f_fn = f_fn
+        self.h_fn = h_fn
+        self.F_fn = F_fn
+        self.H_fn = H_fn
 
-#     def res_fun(self, x, LP, y_seq, Q, R, gamma=1.0, xend=None) : 
-#         num_obs = len(y_seq)
-#         ds = int(x.size / (num_obs+1))
+    def res_fun(self, x, LP, y_seq, Q, R, gamma=1.0, xend=None) : 
+        num_obs = len(y_seq)
+        ds = int(x.size / (num_obs+1))
 
-#         LQ = np.linalg.cholesky(inv(Q))
-#         LR = np.linalg.cholesky(inv(R))
-#         f = np.insert(x[:ds], 0, 1)[np.newaxis,:]
-#         L = LP[:]
-#         for i in range(num_obs) : 
-#             f = np.hstack((f, x[ds*(i+1):ds*(i+2)]-dyn.f(x[ds*(i):ds*(i+1)])[np.newaxis,:], 
-#                               y_seq[i]-dyn.h(x[ds*(i+1):ds*(i+2)])[np.newaxis,:]))
-#             L = block_diag((L, LQ, LR))
+        LQ = np.linalg.cholesky(inv(Q))
+        LR = np.linalg.cholesky(inv(R))
+        f = np.insert(x[:ds], 0, 1)[np.newaxis,:]
+        L = LP[:]
+        for i in range(num_obs) : 
+            f = np.hstack((f, x[ds*(i+1):ds*(i+2)]-self.f_fn(x[ds*(i):ds*(i+1)])[np.newaxis,:], 
+                              y_seq[i]-self.h_fn(x[ds*(i+1):ds*(i+2)])[np.newaxis,:]))
+            L = block_diag((L, LQ, LR))
         
-#         if xend is not None : 
-#             f = np.hstack((f, (xend-dyn.f(x[-ds:]))[np.newaxis,:]))
-#             L = block_diag((L, LQ))
+        if xend is not None : 
+            f = np.hstack((f, (xend-self.f_fn(x[-ds:]))[np.newaxis,:]))
+            L = block_diag((L, LQ))
         
-#         return (f@L).reshape(-1)
+        return (f@L).reshape(-1)
 
-#     def jac_fun(self, x, LP, y_seq, Q, R, gamma=1.0, xend=None) : 
-#         num_obs = len(y_seq)
-#         ds = int(x.size / (num_obs+1))
-#         jadd = lambda x0, x1 : np.vstack((np.hstack((-dyn.F(x0), np.eye(ds))), np.pad(-dyn.H(x1), ((0,0),(ds,0)))))
+    def jac_fun(self, x, LP, y_seq, Q, R, gamma=1.0, xend=None) : 
+        num_obs = len(y_seq)
+        ds = int(x.size / (num_obs+1))
+        jadd = lambda x0, x1 : np.vstack((np.hstack((-self.F_fn(x0), np.eye(ds))), np.pad(-self.H_fn(x1), ((0,0),(ds,0)))))
 
-#         LQ = np.linalg.cholesky(inv(Q))
-#         LR = np.linalg.cholesky(inv(R))
-#         J = np.pad(np.eye(ds), ((1,0),(0,0)))
-#         L = LP[:]
-#         for i in range(num_obs) : 
-#             J = np.pad(J, ((0,0), (0,ds)))
-#             Jadd = np.pad(jadd(x[ds*i:ds*(i+1)], x[ds*(i+1):ds*(i+2)]), ((0,0), (i*ds,0)))
-#             J = np.vstack((J, Jadd))
-#             L = block_diag((L, LQ, LR))
+        LQ = np.linalg.cholesky(inv(Q))
+        LR = np.linalg.cholesky(inv(R))
+        J = np.pad(np.eye(ds), ((1,0),(0,0)))
+        L = LP[:]
+        for i in range(num_obs) : 
+            J = np.pad(J, ((0,0), (0,ds)))
+            Jadd = np.pad(jadd(x[ds*i:ds*(i+1)], x[ds*(i+1):ds*(i+2)]), ((0,0), (i*ds,0)))
+            J = np.vstack((J, Jadd))
+            L = block_diag((L, LQ, LR))
 
-#         if xend is not None : 
-#             Jadd = np.pad(-dyn.F(xend), ((0,0),(ds*num_obs,0)))
-#             J = np.vstack((J, Jadd))
-#             L = block_diag((L, LQ))
+        if xend is not None : 
+            Jadd = np.pad(-self.F_fn(xend), ((0,0),(ds*num_obs,0)))
+            J = np.vstack((J, Jadd))
+            L = block_diag((L, LQ))
 
-#         return L.T@J
+        return L.T@J
 
-# class Quadratic() : 
-#     def __init__(self) -> None:
-#         pass
+class Quadratic() : 
+    def __init__(self, f_fn, h_fn, F_fn, H_fn) -> None:
+        self.f_fn = f_fn
+        self.h_fn = h_fn
+        self.F_fn = F_fn
+        self.H_fn = H_fn
 
-#     def res_fun(self, x, P_inv, y_seq, Q, R, x0_bar, gamma=1.0, xend=None) : 
-#         num_obs = len(y_seq)
-#         ds = x.size // (num_obs+1)
+    def res_fun(self, x, P_inv, y_seq, Q, R, x0_bar, gamma=1.0, xend=None) : 
+        num_obs = len(y_seq)
+        ds = x.size // (num_obs+1)
 
-#         f = np.tile(np.array(x[:ds] - x0_bar), (1,1))
-#         M = np.copy(P_inv) * gamma
-#         for i in range(num_obs) : 
-#             f = np.hstack((f, x[ds*(i+1):ds*(i+2)]-dyn.f(x[ds*(i):ds*(i+1)])[np.newaxis,:], 
-#                               y_seq[i]-dyn.h(x[ds*(i+1):ds*(i+2)])[np.newaxis,:]))
-#             M = block_diag((M, inv(Q), inv(R)))
+        f = np.array(x[:ds] - x0_bar)[np.newaxis,:]
+        M = np.copy(P_inv) * gamma
+        for i in range(num_obs) : 
+            f = np.hstack((f, x[ds*(i+1):ds*(i+2)]-self.f_fn(x[ds*(i):ds*(i+1)])[np.newaxis,:], 
+                              y_seq[i]-self.h_fn(x[ds*(i+1):ds*(i+2)])[np.newaxis,:]))
+            M = block_diag((M, inv(Q), inv(R)))
         
-#         if xend is not None : 
-#             f = np.hstack((f, (xend-dyn.f(x[-ds:]))[np.newaxis,:]))
-#             M = block_diag((M, inv(Q)))
+        if xend is not None : 
+            f = np.hstack((f, (xend-self.f_fn(x[-ds:]))[np.newaxis,:]))
+            M = block_diag((M, inv(Q)))
         
-#         L = np.linalg.cholesky(M)
-#         return (f@L).reshape(-1)
+        L = np.linalg.cholesky(M)
+        return (f@L).reshape(-1)
 
-#     def jac_fun(self, x, P_inv, y_seq, Q, R, x0_bar, gamma=1.0, xend=None) : 
-#         num_obs = len(y_seq)
-#         ds = int(x.size / (num_obs+1))
-#         jadd = lambda x0, x1 : np.vstack((np.hstack((-dyn.F(x0), np.eye(ds))), np.pad(-dyn.H(x1), ((0,0),(ds,0)))))
+    def jac_fun(self, x, P_inv, y_seq, Q, R, x0_bar, gamma=1.0, xend=None) : 
+        num_obs = len(y_seq)
+        ds = int(x.size / (num_obs+1))
+        jadd = lambda x0, x1 : np.vstack((np.hstack((-self.F_fn(x0), np.eye(ds))), np.pad(-self.H_fn(x1), ((0,0),(ds,0)))))
 
-#         J = np.eye(ds)
-#         M = P_inv[:] * gamma
-#         for i in range(num_obs) : 
-#             J = np.pad(J, ((0,0), (0,ds)))
-#             Jadd = np.pad(jadd(x[ds*i:ds*(i+1)], x[ds*(i+1):ds*(i+2)]), ((0,0), (i*ds,0)))
-#             J = np.vstack((J, Jadd))
-#             M = block_diag((M, inv(Q), inv(R)))
+        J = np.eye(ds)
+        M = P_inv[:] * gamma
+        for i in range(num_obs) : 
+            J = np.pad(J, ((0,0), (0,ds)))
+            Jadd = np.pad(jadd(x[ds*i:ds*(i+1)], x[ds*(i+1):ds*(i+2)]), ((0,0), (i*ds,0)))
+            J = np.vstack((J, Jadd))
+            M = block_diag((M, inv(Q), inv(R)))
 
-#         if xend is not None : 
-#             Jadd = np.pad(-dyn.F(xend), ((0,0),(ds*num_obs,0)))
-#             J = np.vstack((J, Jadd))
-#             M = block_diag((M, inv(Q)))
+        if xend is not None : 
+            Jadd = np.pad(-self.F_fn(xend), ((0,0),(ds*num_obs,0)))
+            J = np.vstack((J, Jadd))
+            M = block_diag((M, inv(Q)))
 
-#         L = np.linalg.cholesky(M).T
-#         return L@J
+        L = np.linalg.cholesky(M).T
+        return L@J
 
 
 class Particle_Filter() : 
