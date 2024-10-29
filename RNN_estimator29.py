@@ -185,7 +185,6 @@ class RL_estimator(est.Estimator):
         self.scheduler.load_state_dict(torch.load(baseName+".sch"))
     # end function load_model
     def train(self, x_batch_test:list, y_batch_test:list, trainParams:dict, estParams:dict) -> None:
-        logfile = fun.LogFile(fileName="output/log.txt", rename_option=True)
         ds = self.model.dim_state
         do = self.model.dim_obs
         x_batch, y_batch = getData(modelName=self.model.name, steps=trainParams["steps"], 
@@ -198,12 +197,6 @@ class RL_estimator(est.Estimator):
         self.cov = trainParams['cov'] if isinstance(trainParams['cov'], np.ndarray) else trainParams['cov']*np.eye(ds)
         saveFile = fun.checkFilename(filename=trainParams["saveFile"], suffix='.mdl')
         self.noiseGen = fun.RandomGenerator(randomFun=np.random.multivariate_normal, rand_num=222)
-        for key, value in trainParams.items() : 
-            print(f"{key}: {value}")
-        print("optimizer params: ")
-        print(f"betas: {self.optimizer.param_groups[0]['betas']}")
-        print(f"weight_decay: {self.optimizer.param_groups[0]['weight_decay']}\n")
-        logfile.flush()
         #region 初始化参数
         loss_seq = []
         min_loss = 0
@@ -255,20 +248,19 @@ class RL_estimator(est.Estimator):
                     self.hidden.detach_()
                     Q_list = []
                     targetQ_list = []
-                    print(f"loss: {loss.item()}")
+                    print(f"loss: {loss.item()}", flush=True)
                     loss_seq.append(loss.item())
                     self.scheduler.step(loss) # 学习率更新
                     if loss.item() < min_loss or min_loss == 0: # 保存学习过程中loss最低的模型
                         min_loss = loss.item()
                         self.save_model(saveFile)
-                    logfile.flush()
                 c = c_next
                 t += 1
             #region MSE指标计算并打印
             MSE, RMSE = fun.calMSE(x_batch=[x_batch[i]], xhat_batch=[x_hat_seq])
             print(f"\nstate MSE of batch {i}: MSE = {MSE}, RMSE = {RMSE}")
             MSE, RMSE = fun.calMSE(x_batch=[y_batch[i]], xhat_batch=[y_hat_seq])
-            print(f"obs MSE of batch {i}: MSE = {MSE}, RMSE = {RMSE}\n")
+            print(f"obs MSE of batch {i}: MSE = {MSE}, RMSE = {RMSE}\n", flush=True)
             #endregion
             i += 1 # 单纯用来计数打印，算法中不使用
         # end for i(episode)
@@ -279,7 +271,6 @@ class RL_estimator(est.Estimator):
         #region 测试
         self.policy.eval()
         simulate(agent=self, estParams=estParams, x_batch=x_batch_test, y_batch_test=y_batch_test, isPrint=True)
-        logfile.endLog()
         #endregion
     # end function train
     def initialize(self, x_batch_init:list, y_batch_init:list, estParams:dict):
@@ -334,15 +325,19 @@ def main():
     #region 修改参数以便人工测试（自动测试时注释掉，否则参数无法自动变化）
     # trainParams["lr"] = 5e-4
     # trainParams["lr_min"] = 1e-6
-    # nnParams["hidden_layer"] = ([64], 32, [64])
+    # args.hidden_layer = ([256], 32, [256]) # 这几个要同步修改
+    # nnParams["dim_fc1"] = [256] # 这几个要同步修改
+    # nnParams["dim_rnn_hidden"] = 32 # 这几个要同步修改
+    # nnParams["dim_fc2"] = [256] # 这几个要同步修改
     # nnParams["dropout"] = 0
     # nnParams["num_rnn_layers"] = 1
     # nnParams["type_activate"] = "relu"
     # nnParams["type_rnn"] = "gru"
     #endregion
-    # 定义估计器类
+    # 定义估计器类以及获取测试数据
     agent = RL_estimator(model=model, lr=trainParams["lr"], lr_min=trainParams["lr_min"], nnParams=nnParams, 
                          gamma=args.gamma, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+    x_batch_test, y_batch_test = getData(modelName=model.name, steps=steps, episodes=episodes, randSeed=randSeed)
     #region 策略网络初始化
     initNetName = f"net/{nnParams['type_rnn']}_{nnParams['type_activate']}_dropout{nnParams['dropout']}_layer{nnParams['num_rnn_layers']}_"\
                   f"{args.hidden_layer}_steps{initsteps}_epis{initepisodes}_randseed{initrandSeed}.mdl"
@@ -353,9 +348,22 @@ def main():
         agent.initialize(x_batch_init=x_batch_init, y_batch_init=y_batch_init, estParams=estParams)
         torch.save(agent.policy.state_dict(), initNetName)
     #endregion
-    x_batch_test, y_batch_test = getData(modelName=model.name, steps=steps, episodes=episodes, randSeed=randSeed)
-    #region 模型训练（训练结束后会自动进行测试）
+    #region 相关训练参数打印以及模型训练（训练结束后会自动进行测试）
+    logfile = fun.LogFile(fileName="output/log.txt", rename_option=True)
+    print("estimator params: ")
+    for key, value in estParams.items() : 
+        print(f"{key}: {value}")
+    print("train params: ")
+    for key, value in trainParams.items() : 
+        print(f"{key}: {value}")
+    print("network params: ")
+    for key, value in nnParams.items() : 
+        print(f"{key}: {value}")
+    print("optimizer params: ")
+    print(f"betas: {agent.optimizer.param_groups[0]['betas']}")
+    print(f"weight_decay: {agent.optimizer.param_groups[0]['weight_decay']}\n", flush=True)
     agent.train(x_batch_test=x_batch_test, y_batch_test=y_batch_test, trainParams=trainParams, estParams=estParams)
+    logfile.endLog()
     #endregion
     #region 加载模型并测试（不训练时才需要加载）
     # agent.load_model("net/RNN_net(1)")
