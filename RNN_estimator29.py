@@ -173,17 +173,17 @@ class RL_estimator(est.Estimator):
         if c is not None:Q += c.squeeze()
         return Q
     # end function value
-    def save_model(self, baseName) -> None:
+    def save_network(self, baseName) -> None:
         torch.save(self.policy.state_dict(), baseName+'.mdl')
         torch.save(self.optimizer.state_dict(), baseName+".opt")
         torch.save(self.scheduler.state_dict(), baseName+".sch")
         print(f"save model at {baseName}")
-    # end function save_model
-    def load_model(self, baseName) -> None:
+    # end function save_network
+    def load_network(self, baseName) -> None:
         self.policy.load_state_dict(torch.load(baseName+".mdl"))
         self.optimizer.load_state_dict(torch.load(baseName+".opt"))
         self.scheduler.load_state_dict(torch.load(baseName+".sch"))
-    # end function load_model
+    # end function load_network
     def train(self, x_batch_test:list, y_batch_test:list, trainParams:dict, estParams:dict) -> None:
         ds = self.model.dim_state
         do = self.model.dim_obs
@@ -253,7 +253,7 @@ class RL_estimator(est.Estimator):
                     self.scheduler.step(loss) # 学习率更新
                     if loss.item() < min_loss or min_loss == 0: # 保存学习过程中loss最低的模型
                         min_loss = loss.item()
-                        self.save_model(saveFile)
+                        self.save_network(saveFile)
                 c = c_next
                 t += 1
             #region MSE指标计算并打印
@@ -265,7 +265,7 @@ class RL_estimator(est.Estimator):
             i += 1 # 单纯用来计数打印，算法中不使用
         # end for i(episode)
         #region 保存网络参数文件，以及打印相关参数，绘制损失曲线
-        self.save_model(fileName=f'{saveFile}end')
+        self.save_network(f'{saveFile}end')
         plotReward(loss_seq, filename="picture/train_loss.png")
         #endregion
         #region 测试
@@ -366,7 +366,7 @@ def main():
     logfile.endLog()
     #endregion
     #region 加载模型并测试（不训练时才需要加载）
-    # agent.load_model("net/RNN_net(1)")
+    # agent.load_network("net/RNN_net(1)")
     # simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
     #endregion
 # end function main
