@@ -362,6 +362,8 @@ def main():
     print("optimizer params: ")
     print(f"betas: {agent.optimizer.param_groups[0]['betas']}")
     print(f"weight_decay: {agent.optimizer.param_groups[0]['weight_decay']}\n", flush=True)
+    print("Before train, the test result: ") # 训练前测试一次估计性能
+    simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
     agent.train(x_batch_test=x_batch_test, y_batch_test=y_batch_test, trainParams=trainParams, estParams=estParams)
     logfile.endLog()
     #endregion
