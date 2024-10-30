@@ -67,9 +67,6 @@ class EKF(Estimator):
     def estimate(self, y, Q, R, u=None):
         self.predict(Q=Q, u=u)
         self.update(y=y, R=R)
-        if self.x_hat.size == 4: 
-            self.x_hat[0] = 0
-            self.x_hat[1] = 0
 
 class MHE(Estimator):
     def __init__(self, f_fn, h_fn, F_fn, H_fn, window, x0_hat=None, P0_hat=None) -> None:
