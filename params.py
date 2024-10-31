@@ -79,7 +79,7 @@ def getNNParams(netName, hidden_layer, **kwargs):
             "dim_fc1": hidden_layer[0],
             "dim_fc2": hidden_layer[2],
             "type_activate": 'relu',
-            "type_rnn": 'gru',
+            "type_rnn": 'lstm',
             "dim_rnn_hidden": hidden_layer[1],
             "num_rnn_layers": 1,
             "rand_seed": 111,
