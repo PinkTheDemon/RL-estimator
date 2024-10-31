@@ -69,6 +69,7 @@ def checkFilename(filename:str, suffix:str=None) -> str :
     else :
         baseName = filename
         extension = suffix
+        filename = f'{baseName}{suffix}'
     index = 1
     while (os.path.exists(filename)) : 
         # 如果文件存在，自动更名

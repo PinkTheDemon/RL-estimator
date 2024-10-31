@@ -161,7 +161,7 @@ class RL_estimator(est.Estimator):
         if isEval:
             input.requires_grad_(False)
             self.policy.eval()
-        self.P_inv, c, self.hidden = self.policy.forward(input, self.hidden)
+        self.P_inv, c, self.hidden = self.policy.forward(input, self.hidden) ## 这里不一定没计算梯度，可能还是要用到torch.no_grad()或者torch.inference_mode()
         self.x_hat = result.x[-ds: ]
         self.y_hat = self.model.h(self.x_hat)
         self.P_hat = fun.inv(self.P_inv.detach().squeeze().cpu().numpy())
@@ -270,7 +270,7 @@ class RL_estimator(est.Estimator):
         #endregion
         #region 测试
         self.policy.eval()
-        simulate(agent=self, estParams=estParams, x_batch=x_batch_test, y_batch_test=y_batch_test, isPrint=True)
+        simulate(agent=self, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
         #endregion
     # end function train
     def initialize(self, x_batch_init:list, y_batch_init:list, estParams:dict):
@@ -325,12 +325,12 @@ def main():
     #region 修改参数以便人工测试（自动测试时注释掉，否则参数无法自动变化）
     # trainParams["lr"] = 5e-4
     # trainParams["lr_min"] = 1e-6
-    # args.hidden_layer = ([256], 32, [256]) # 这几个要同步修改
-    # nnParams["dim_fc1"] = [256] # 这几个要同步修改
-    # nnParams["dim_rnn_hidden"] = 32 # 这几个要同步修改
-    # nnParams["dim_fc2"] = [256] # 这几个要同步修改
+    # args.hidden_layer = ([64], 64, [64]) # 这几个要同步修改
+    # nnParams["dim_fc1"] = [64] # 这几个要同步修改
+    # nnParams["dim_rnn_hidden"] = 64 # 这几个要同步修改
+    # nnParams["dim_fc2"] = [64] # 这几个要同步修改
     # nnParams["dropout"] = 0
-    # nnParams["num_rnn_layers"] = 1
+    # nnParams["num_rnn_layers"] = 2
     # nnParams["type_activate"] = "relu"
     # nnParams["type_rnn"] = "gru"
     #endregion
