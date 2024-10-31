@@ -68,7 +68,7 @@ class Discrete1(Model):
 
 # 洛伦兹吸引子
 class Continuous1(Model):
-    def __init__(self, sampleTime=0.05) -> None:
+    def __init__(self, sampleTime=0.1) -> None:
         super().__init__("Continuous1", 3, 2)
         self.modelErr = False
         self.sampleTime = sampleTime
