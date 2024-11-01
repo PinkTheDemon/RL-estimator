@@ -232,7 +232,7 @@ class RL_estimator(est.Estimator):
                 P_inv_seq.append(P_inv_next.detach().squeeze().cpu().numpy().reshape((ds,-1)))
                 #endregion
                 #region 计算targetQ和Q
-                if t >= train_window: # 窗口大于指定长度开始训练（修改：窗口长度小于指定长度的数据不要）## 是不是等大于多一点的窗口再开始训练好一点？
+                if t >= 18: # 窗口大于指定长度开始训练（修改：窗口长度小于指定长度的数据不要）## 是不是等大于多一点的窗口再开始训练好一点？
                     for _ in range(trainParams["aver_num"]): # 为了实现函数拟合，取多个值计算arrival cost值
                         x_next_noise = x_next_hat + self.noiseGen.getRandom(mean=np.zeros((ds, )), cov=self.cov)
                         result = est.NLSF_uniform(P_inv_seq[t-train_window], y_seq=y_list[ :-1], Q=Q, R=R, gamma=self.gamma, 
