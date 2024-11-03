@@ -208,11 +208,10 @@ class RL_estimator(est.Estimator):
         #region 初始化参数
         loss_seq = []
         min_loss = 0
-        i = 0
         #endregion
-        for y_seq in y_batch:
+        for i in range(len(y_batch)):
             self.reset(x0_hat, P0_hat)
-            t = 0
+            y_seq = y_batch[i]
             x_hat_seq = []
             y_hat_seq = []
             P_inv_seq = []
@@ -220,8 +219,9 @@ class RL_estimator(est.Estimator):
             c = torch.Tensor([0])
             targetQ_list = []
             Q_list = []
-            for y in y_seq:
+            for t in range(len(y_seq)):
                 #region 获取真实观测值
+                y = y_seq[t]
                 y_list.append(y)
                 if len(y_list) > train_window : del y_list[0]
                 #endregion
@@ -263,14 +263,12 @@ class RL_estimator(est.Estimator):
                         min_loss = loss.item()
                         self.save_network(saveFile)
                 c = c_next
-                t += 1
             #region MSE指标计算并打印
             MSE, RMSE = fun.calMSE(x_batch=[x_batch[i]], xhat_batch=[x_hat_seq])
             print(f"\nstate MSE of batch {i}: MSE = {MSE}, RMSE = {RMSE}")
             MSE, RMSE = fun.calMSE(x_batch=[y_batch[i]], xhat_batch=[y_hat_seq])
             print(f"obs MSE of batch {i}: MSE = {MSE}, RMSE = {RMSE}\n", flush=True)
             #endregion
-            i += 1 # 单纯用来计数打印，算法中不使用
         # end for i(episode)
         #region 保存网络参数文件，以及打印相关参数，绘制损失曲线
         self.save_network(f'{saveFile}end')
@@ -295,15 +293,26 @@ class RL_estimator(est.Estimator):
             P_hat_seq = np.insert(P_hat_seq, 0, estParams["P0_hat"], axis=0)
             input_seq = []
             target_Pinv_seq = []
-            target_h_seq = []
+            target_c_seq = []
+            c = 0
             for t in range(len(y_seq)):
                 input_seq.append(np.hstack((x_hat_seq[t], y_seq[t])))
-                target_Pinv_seq.append(fun.inv(P_hat_seq[t+1]))
+                Ptp1_inv = fun.inv(P_hat_seq[t+1])
+                target_Pinv_seq.append(Ptp1_inv)
+                xt = x_hat_seq[t].reshape(-1,1)
+                xtp1 = x_hat_seq[t+1].reshape(-1,1)
+                ytp1 = y_seq[t].reshape(-1,1)
+                Pt_inv = fun.inv(P_hat_seq[t])
+                Ft = self.model.F(x=x_hat_seq[t])
+                Qinv = fun.inv(estParams["Q"])
+                Rinv = fun.inv(estParams["R"])
+                c = c + xt.T@(Pt_inv-Pt_inv.T@fun.inv(Pt_inv+Ft.T@Qinv@Ft)@Pt_inv)@xt + ytp1.T@Rinv@ytp1 - xtp1.T@Ptp1_inv@xtp1
+                target_c_seq.append(c.item())
             input_seq = torch.FloatTensor(np.stack(input_seq)).unsqueeze(0).to(self.device)
-            Pinv_seq, h_seq, _ = self.policy.forward(input_seq, None)
+            Pinv_seq, c_seq, _ = self.policy.forward(input_seq, None)
             target_Pinv_seq = torch.FloatTensor(np.stack(target_Pinv_seq)).unsqueeze(0).to(self.device)
-            target_h_seq = torch.zeros_like(h_seq, device=self.device)
-            loss = F.mse_loss(Pinv_seq, target_Pinv_seq)+F.mse_loss(h_seq, target_h_seq)
+            target_c_seq = torch.zeros_like(c_seq, device=self.device)#torch.FloatTensor(np.stack(target_c_seq)).unsqueeze(0).to(self.device)#
+            loss = F.mse_loss(Pinv_seq, target_Pinv_seq)+F.mse_loss(c_seq, target_c_seq)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             # grad_clipping(self.policy, 10)
