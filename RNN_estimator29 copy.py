@@ -250,7 +250,7 @@ class RL_estimator(est.Estimator):
                 if targetQ == 0:
                     targetQ = (x-x_next_hat).reshape(1,-1)@P_inv_seq[-1]@(x-x_next_hat).reshape(-1,1)
                 else :
-                    targetQ += (x_next_hat-x_hat_seq[-2]).reshape(1,-1)@fun.inv(Q)@(x_next_hat-x_hat_seq[-2]).reshape(-1,1) + \
+                    targetQ += (x-x_next_hat).reshape(1,-1)@fun.inv(Q)@(x-x_next_hat).reshape(-1,1) + \
                                (y-y_hat_seq[-1]).reshape(1,-1)@fun.inv(R)@(y-y_hat_seq[-1]).reshape(-1,1)
                     targetQ_list.append(targetQ)
                     Qvalue = self.value(x=x, x_bar=x_next_hat, P_inv=P_inv_next, c=c_next)
