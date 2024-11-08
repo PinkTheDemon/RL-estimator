@@ -22,7 +22,7 @@ class ActorRNN(nn.Module):
         #region 属性定义以及固定随机数种子(固定网络初始化权重)
         torch.manual_seed(rand_seed)
         self.dim_input = dim_input
-        self.dim_output = dim_output-1
+        self.dim_output = dim_output
         self.num_rnn_layers = num_rnn_layers
         self.dim_rnn_hidden = dim_rnn_hidden
         self.type_activate = type_activate.lower()
@@ -97,7 +97,7 @@ class ActorRNN(nn.Module):
         # output[0][...,diag_indices] = F.softplus(output[0][...,diag_indices])
         #endregion
         #region 将输出转换成矩阵形式
-        ds = fun.do2ds(self.dim_output+1)
+        ds = fun.do2ds(self.dim_output)
         L = torch.zeros((outputs[0].shape[:-1])+(ds, ds), device=self.device)
         indices = torch.tril_indices(row=ds, col=ds, offset=0) # 获取下三角矩阵的索引
         L[..., indices[0], indices[1]] = outputs[0]
@@ -140,11 +140,11 @@ def grad_clipping(net, theta) -> None:
 class RL_estimator(est.Estimator):
     def __init__(self, model:Model, lr, lr_min, nnParams:dict, gamma=1.0, device='cpu', x0_hat=None, P0_hat=None) -> None:
         self.model = model
-        self.dim_input = model.dim_state + model.dim_obs
-        self.dim_output = fun.ds2do(model.dim_state)
+        dim_input = model.dim_state + model.dim_obs
+        dim_output = fun.ds2do(model.dim_state)
         self.device = device
         self.gamma = gamma
-        self.policy = ActorRNN(dim_input=self.dim_input, dim_output=self.dim_output, **nnParams).to(self.device)
+        self.policy = ActorRNN(dim_input=dim_input, dim_output=dim_output, **nnParams).to(self.device)
         self.optimizer = Adam(self.policy.parameters(), lr=lr)
         self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=50, factor=0.5, min_lr=lr_min, verbose=True)
         super().__init__(name="RL_estimator", x0_hat=x0_hat, P0_hat=P0_hat)
@@ -157,23 +157,35 @@ class RL_estimator(est.Estimator):
             self.P_inv = torch.FloatTensor(fun.inv(P0_hat))
         self.hidden = None
         self.policy.train()
+        self.y_seq = []
+        self.x0_bar_seq = [x0_hat]
     # end function reset
     def estimate(self, y, Q, R, isEval:bool=True):
         ds = self.model.dim_state
-        result = est.NLSF_uniform(self.P_inv.detach().squeeze().cpu().numpy().reshape((ds,-1)), y_seq=[y], 
+        #region 计算窗口长度可变的优化问题
+        self.y_seq.append(y)
+        if len(self.y_seq) > 1 : del self.y_seq[0] # 2是窗口长度
+        result = est.NLSF_uniform(self.P_inv.detach().squeeze().cpu().numpy().reshape((ds,-1)), y_seq=self.y_seq, 
                                   Q=Q, R=R, f=self.model.f, h=self.model.h, F=self.model.F, H=self.model.H, 
-                                  mode="quadratic", x0=[self.x_hat], x0_bar=self.x_hat, gamma=self.gamma)
-        # self.status = result.status
-        input = np.tile(np.hstack((self.x_hat, y)), (1,1,1))
-        input = torch.from_numpy(input).float().to(self.device)
-        if isEval:
-            input.requires_grad_(False)
-            self.policy.eval()
-        self.P_inv, c, self.hidden = self.policy.forward(input, self.hidden) ## 这里不一定没计算梯度，可能还是要用到torch.no_grad()或者torch.inference_mode()
-        self.x_hat = result.x[-ds: ]
-        self.y_hat = self.model.h(self.x_hat)
-        self.P_hat = fun.inv(self.P_inv.detach().squeeze().cpu().numpy())
+                                  mode="quadratic", x0=self.x0_bar_seq[:], x0_bar=self.x0_bar_seq[0], gamma=self.gamma)
+        self.x_hat = result.x[-ds:]
+        self.y_hat = self.model.h(x=self.x_hat)
+        c = 0
+        # EKF方法更新P(直观解释：x0被删去的时候才需要更新P)
+        if len(self.x0_bar_seq) == 1: # 2是窗口长度
+            x0_hat = self.x0_bar_seq[0]
+            input = np.tile(np.hstack((x0_hat, self.y_seq[0])), (1,1,1))
+            input = torch.from_numpy(input).float().to(self.device)
+            if isEval:
+                input.requires_grad_(False)
+                self.policy.eval()
+            self.P_inv, c, self.hidden = self.policy.forward(input, self.hidden)
+            self.P_hat = fun.inv(self.P_inv.detach().squeeze().cpu().numpy())
+        # 更新x0_bar_seq
+        self.x0_bar_seq.append(self.x_hat) # 要不用新的就都不用新的，训练的时候是不用新的所以测试也不应该用新的
+        if len(self.x0_bar_seq) > 1 : del self.x0_bar_seq[0] # 2是窗口长度
         return self.x_hat, self.P_inv, c
+        #endregion
     # end function estimate
     def value(self, x, x_bar, P_inv, c=None):
         x = torch.Tensor((x - x_bar)).unsqueeze(0)
@@ -351,53 +363,54 @@ def main():
     nnParams = pm.getNNParams(netName="ActorRNN", hidden_layer=args.hidden_layer, dropout=args.dropout, num_rnn_layers=args.num_layer)
     #endregion
     #region 修改参数以便人工测试（自动测试时注释掉，否则参数无法自动变化）
-    # trainParams["lr"] = 5e-4
-    # trainParams["lr_min"] = 1e-6
-    # args.hidden_layer = ([64], 64, [64]) # 这几个要同步修改
-    # nnParams["dim_fc1"] = [64] # 这几个要同步修改
-    # nnParams["dim_rnn_hidden"] = 64 # 这几个要同步修改
-    # nnParams["dim_fc2"] = [64] # 这几个要同步修改
-    # nnParams["dropout"] = 0.0
-    # nnParams["num_rnn_layers"] = 2
-    # nnParams["type_activate"] = "relu"
-    # nnParams["type_rnn"] = "gru"
+    trainParams["lr"] = 5e-4
+    trainParams["lr_min"] = 1e-6
+    trainParams["gamma"] = 0.8
+    args.hidden_layer = ([], 64, [128]) # 这几个要同步修改
+    nnParams["dim_fc1"] = [] # 这几个要同步修改
+    nnParams["dim_rnn_hidden"] = 64 # 这几个要同步修改
+    nnParams["dim_fc2"] = [128] # 这几个要同步修改
+    nnParams["dropout"] = 0.1
+    nnParams["num_rnn_layers"] = 3
+    nnParams["type_activate"] = "relu"
+    nnParams["type_rnn"] = "lstm"
     #endregion
     # 定义估计器类以及获取测试数据
     agent = RL_estimator(model=model, lr=trainParams["lr"], lr_min=trainParams["lr_min"], nnParams=nnParams, 
-                         gamma=args.gamma, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+                         gamma=trainParams["gamma"], device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
     x_batch_test, y_batch_test = getData(modelName=model.name, steps=steps, episodes=episodes, randSeed=randSeed)
     #region 策略网络初始化
-    initNetName = f"net/{nnParams['type_rnn']}_{nnParams['type_activate']}_dropout{nnParams['dropout']}_layer{nnParams['num_rnn_layers']}_"\
-                  f"{args.hidden_layer}_steps{initsteps}_epis{initepisodes}_randseed{initrandSeed}.mdl"
-    if os.path.exists(initNetName):
-        agent.policy.load_state_dict(torch.load(initNetName))
-    else :
-        x_batch_init, y_batch_init = getData(modelName=model.name, steps=initsteps, episodes=initepisodes, randSeed=initrandSeed)
-        agent.initialize(x_batch_init=x_batch_init, y_batch_init=y_batch_init, estParams=estParams)
-        torch.save(agent.policy.state_dict(), initNetName)
+    # initNetName = f"net/{nnParams['type_rnn']}_{nnParams['type_activate']}_dropout{nnParams['dropout']}_layer{nnParams['num_rnn_layers']}_"\
+    #               f"{args.hidden_layer}_steps{initsteps}_epis{initepisodes}_randseed{initrandSeed}.mdl"
+    # if os.path.exists(initNetName):
+    #     agent.policy.load_state_dict(torch.load(initNetName))
+    # else :
+    #     x_batch_init, y_batch_init = getData(modelName=model.name, steps=initsteps, episodes=initepisodes, randSeed=initrandSeed)
+    #     agent.initialize(x_batch_init=x_batch_init, y_batch_init=y_batch_init, estParams=estParams)
+    #     torch.save(agent.policy.state_dict(), initNetName)
     #endregion
     #region 相关训练参数打印以及模型训练（训练结束后会自动进行测试）
-    logfile = fun.LogFile(fileName="output/log.txt", rename_option=True)
-    print("estimator params: ")
-    for key, value in estParams.items() : 
-        print(f"{key}: {value}")
-    print("train params: ")
-    for key, value in trainParams.items() : 
-        print(f"{key}: {value}")
-    print("network params: ")
-    for key, value in nnParams.items() : 
-        print(f"{key}: {value}")
-    print("optimizer params: ")
-    print(f"betas: {agent.optimizer.param_groups[0]['betas']}")
-    print(f"weight_decay: {agent.optimizer.param_groups[0]['weight_decay']}\n", flush=True)
-    print("Before train, the test result: ") # 训练前测试一次估计性能
-    simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
-    agent.train(x_batch_test=x_batch_test, y_batch_test=y_batch_test, trainParams=trainParams, estParams=estParams)
-    logfile.endLog()
+    # logfile = fun.LogFile(fileName="output/log.txt", rename_option=True)
+    # print("estimator params: ")
+    # for key, value in estParams.items() : 
+    #     print(f"{key}: {value}")
+    # print("train params: ")
+    # for key, value in trainParams.items() : 
+    #     print(f"{key}: {value}")
+    # print("network params: ")
+    # for key, value in nnParams.items() : 
+    #     print(f"{key}: {value}")
+    # print("optimizer params: ")
+    # print(f"betas: {agent.optimizer.param_groups[0]['betas']}")
+    # print(f"weight_decay: {agent.optimizer.param_groups[0]['weight_decay']}\n", flush=True)
+    # print("Before train, the test result: ") # 训练前测试一次估计性能
+    # simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
+    # agent.train(x_batch_test=x_batch_test, y_batch_test=y_batch_test, trainParams=trainParams, estParams=estParams)
+    # logfile.endLog()
     #endregion
     #region 加载模型并测试（不训练时才需要加载）
-    # agent.load_network("net/RNN_net(1)")
-    # simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
+    agent.load_network("net/RNN_net(12)end")
+    simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
     #endregion
 # end function main
 

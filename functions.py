@@ -57,10 +57,10 @@ def delete_empty(M) :
 
 # input dim_state and output dim_output
 def ds2do(dim_input:int) : 
-    return dim_input*(dim_input+1) // 2 + 1
+    return dim_input*(dim_input+1) // 2
 
 def do2ds(dim_output:int) : 
-    return int(np.sqrt(2*(dim_output-1)))
+    return int(np.sqrt(2*(dim_output)))
 
 
 def checkFilename(filename:str, suffix:str=None) -> str : 

@@ -22,7 +22,7 @@ class ActorRNN(nn.Module):
         #region 属性定义以及固定随机数种子(固定网络初始化权重)
         torch.manual_seed(rand_seed)
         self.dim_input = dim_input
-        self.dim_output = dim_output-1
+        self.dim_output = dim_output
         self.num_rnn_layers = num_rnn_layers
         self.dim_rnn_hidden = dim_rnn_hidden
         self.type_activate = type_activate.lower()
@@ -97,7 +97,7 @@ class ActorRNN(nn.Module):
         # output[0][...,diag_indices] = F.softplus(output[0][...,diag_indices])
         #endregion
         #region 将输出转换成矩阵形式
-        ds = fun.do2ds(self.dim_output+1)
+        ds = fun.do2ds(self.dim_output)
         L = torch.zeros((outputs[0].shape[:-1])+(ds, ds), device=self.device)
         indices = torch.tril_indices(row=ds, col=ds, offset=0) # 获取下三角矩阵的索引
         L[..., indices[0], indices[1]] = outputs[0]
@@ -140,11 +140,11 @@ def grad_clipping(net, theta) -> None:
 class RL_estimator(est.Estimator):
     def __init__(self, model:Model, lr, lr_min, nnParams:dict, gamma=1.0, device='cpu', x0_hat=None, P0_hat=None) -> None:
         self.model = model
-        self.dim_input = model.dim_state + model.dim_obs
-        self.dim_output = fun.ds2do(model.dim_state)
+        dim_input = model.dim_state + model.dim_obs
+        dim_output = fun.ds2do(model.dim_state)
         self.device = device
         self.gamma = gamma
-        self.policy = ActorRNN(dim_input=self.dim_input, dim_output=self.dim_output, **nnParams).to(self.device)
+        self.policy = ActorRNN(dim_input=dim_input, dim_output=dim_output, **nnParams).to(self.device)
         self.optimizer = Adam(self.policy.parameters(), lr=lr)
         self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=50, factor=0.5, min_lr=lr_min, verbose=True)
         super().__init__(name="RL_estimator", x0_hat=x0_hat, P0_hat=P0_hat)
