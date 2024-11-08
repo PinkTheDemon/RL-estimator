@@ -306,7 +306,7 @@ class RL_estimator(est.Estimator):
                 Ft = self.model.F(x=x_hat_seq[t])
                 Qinv = fun.inv(estParams["Q"])
                 Rinv = fun.inv(estParams["R"])
-                c = c + xt.T@(Pt_inv-Pt_inv.T@fun.inv(Pt_inv+Ft.T@Qinv@Ft)@Pt_inv)@xt + ytp1.T@Rinv@ytp1 - xtp1.T@Ptp1_inv@xtp1
+                c = self.gamma * c + xt.T@(Pt_inv-Pt_inv.T@fun.inv(Pt_inv+Ft.T@Qinv@Ft)@Pt_inv)@xt + ytp1.T@Rinv@ytp1 - xtp1.T@Ptp1_inv@xtp1
                 target_c_seq.append(c.item())
             input_seq = torch.FloatTensor(np.stack(input_seq)).unsqueeze(0).to(self.device)
             Pinv_seq, c_seq, _ = self.policy.forward(input_seq, None)
@@ -342,6 +342,7 @@ def main():
     #region 修改参数以便人工测试（自动测试时注释掉，否则参数无法自动变化）
     # trainParams["lr"] = 5e-4
     # trainParams["lr_min"] = 1e-6
+    # trainParams["gamma"] = 0.8
     # args.hidden_layer = ([64], 64, [64]) # 这几个要同步修改
     # nnParams["dim_fc1"] = [64] # 这几个要同步修改
     # nnParams["dim_rnn_hidden"] = 64 # 这几个要同步修改
@@ -353,7 +354,7 @@ def main():
     #endregion
     # 定义估计器类以及获取测试数据
     agent = RL_estimator(model=model, lr=trainParams["lr"], lr_min=trainParams["lr_min"], nnParams=nnParams, 
-                         gamma=args.gamma, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+                         gamma=trainParams["gamma"], device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
     x_batch_test, y_batch_test = getData(modelName=model.name, steps=steps, episodes=episodes, randSeed=randSeed)
     #region 策略网络初始化
     initNetName = f"net/{nnParams['type_rnn']}_{nnParams['type_activate']}_dropout{nnParams['dropout']}_layer{nnParams['num_rnn_layers']}_"\
