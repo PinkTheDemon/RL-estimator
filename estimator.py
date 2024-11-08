@@ -215,7 +215,7 @@ class SumOfSquares() :
         LQ = np.linalg.cholesky(inv(Q))
         LR = np.linalg.cholesky(inv(R))
         f = np.insert(x[:ds], 0, 1)[np.newaxis,:]
-        L = LP[:]
+        L = LP[:] * np.sqrt(gamma)
         for i in range(num_obs) : 
             f = np.hstack((f, x[ds*(i+1):ds*(i+2)]-self.f_fn(x[ds*(i):ds*(i+1)])[np.newaxis,:], 
                               y_seq[i]-self.h_fn(x[ds*(i+1):ds*(i+2)])[np.newaxis,:]))
@@ -235,7 +235,7 @@ class SumOfSquares() :
         LQ = np.linalg.cholesky(inv(Q))
         LR = np.linalg.cholesky(inv(R))
         J = np.pad(np.eye(ds), ((1,0),(0,0)))
-        L = LP[:]
+        L = LP[:] * np.sqrt(gamma)
         for i in range(num_obs) : 
             J = np.pad(J, ((0,0), (0,ds)))
             Jadd = np.pad(jadd(x[ds*i:ds*(i+1)], x[ds*(i+1):ds*(i+2)]), ((0,0), (i*ds,0)))
