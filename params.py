@@ -9,6 +9,7 @@ def parseParams():
     parser.add_argument("--hidden_layer", default=([256], 32, [256]))
     parser.add_argument("--dropout", type=float, default=0, help="no effect when num_layer=1")
     parser.add_argument("--num_layer", type=int, default=1)
+    parser.add_argument("--act_fun", type=str, default="relu")
     args = parser.parse_args()
     args.cov = eval(args.cov)
     if isinstance(args.hidden_layer, str) : args.hidden_layer = eval(args.hidden_layer)
@@ -61,10 +62,10 @@ def getTrainParams(estorName, **kwargs):
     if estorName == "RL_estimator":
         trainParams = {
             "steps": 100,
-            "episodes": 100,
+            "episodes": 500,
             "randSeed": 0,
-            "lr": 5e-4,
-            "lr_min": 1e-6,
+            "lr": 5e-3,
+            "lr_min": 1e-5,
             "train_window": 4,
             "aver_num": 50,
             "seq_len": 20,

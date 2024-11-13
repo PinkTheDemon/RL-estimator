@@ -37,8 +37,14 @@ class ActorRNN(nn.Module):
                 self.fc1.append(nn.ReLU())
             elif type_activate.lower() == 'leaky_relu' : 
                 self.fc1.append(nn.LeakyReLU())
+            elif type_activate.lower() == 'prelu' : 
+                self.fc1.append(nn.PReLU())
+            elif type_activate.lower() == 'elu' : 
+                self.fc1.append(nn.ELU())
             elif type_activate.lower() == 'tanh' : 
                 self.fc1.append(nn.Tanh())
+            elif type_activate.lower() == 'sigmoid' : 
+                self.fc2.append(nn.Sigmoid())
             else : 
                 raise ValueError("No such activation layer type defined")
             dim_in = dim_out
@@ -57,13 +63,19 @@ class ActorRNN(nn.Module):
         self.fc2 = nn.ModuleList()
         dim_in = dim_rnn_hidden
         for dim_out in dim_fc2 : 
-            self.fc2.append(nn.Linear(dim_in, dim_out))
+            self.fc2.append(nn.Linear(dim_in, dim_out)) # 这个可以尝试换位置
             if type_activate.lower() == 'relu' : 
                 self.fc2.append(nn.ReLU())
             elif type_activate.lower() == 'leaky_relu' : 
                 self.fc2.append(nn.LeakyReLU())
+            elif type_activate.lower() == 'prelu' : 
+                self.fc1.append(nn.PReLU())
+            elif type_activate.lower() == 'elu' : 
+                self.fc1.append(nn.ELU())
             elif type_activate.lower() == 'tanh' : 
                 self.fc2.append(nn.Tanh())
+            elif type_activate.lower() == 'sigmoid' : 
+                self.fc2.append(nn.Sigmoid())
             else : 
                 raise ValueError("No such activation layer type defined")
             dim_in = dim_out
@@ -301,12 +313,11 @@ class RL_estimator(est.Estimator):
                 target_Pinv_seq.append(Ptp1_inv)
                 xt = x_hat_seq[t].reshape(-1,1)
                 xtp1 = x_hat_seq[t+1].reshape(-1,1)
-                ytp1 = y_seq[t].reshape(-1,1)
-                Pt_inv = fun.inv(P_hat_seq[t])
+                dytp1 = (y_seq[t] - self.model.h(x=self.model.f(x=x_hat_seq[t]))).reshape(-1,1)
                 Ft = self.model.F(x=x_hat_seq[t])
-                Qinv = fun.inv(estParams["Q"])
+                Ht = self.model.H(x=self.model.f(x=x_hat_seq[t]))
                 Rinv = fun.inv(estParams["R"])
-                c = self.gamma * c + xt.T@(Pt_inv-Pt_inv.T@fun.inv(Pt_inv+Ft.T@Qinv@Ft)@Pt_inv)@xt + ytp1.T@Rinv@ytp1 - xtp1.T@Ptp1_inv@xtp1
+                c = c + xt.T@Ft.T@Ptp1_inv@Ft@xt - xtp1.T@Ptp1_inv@xtp1 + dytp1.T@Rinv@dytp1 + 2*xt.T@Ft.T@Ht.T@Rinv@dytp1
                 target_c_seq.append(c.item())
             input_seq = torch.FloatTensor(np.stack(input_seq)).unsqueeze(0).to(self.device)
             Pinv_seq, c_seq, _ = self.policy.forward(input_seq, None)
@@ -337,7 +348,7 @@ def main():
     args = pm.parseParams()
     estParams = pm.getEstParams(modelName=model.name)
     trainParams = pm.getTrainParams(estorName="RL_estimator", cov=args.cov, gamma=args.gamma)
-    nnParams = pm.getNNParams(netName="ActorRNN", hidden_layer=args.hidden_layer, dropout=args.dropout, num_rnn_layers=args.num_layer)
+    nnParams = pm.getNNParams(netName="ActorRNN", hidden_layer=args.hidden_layer, dropout=args.dropout, num_rnn_layers=args.num_layer, type_activate=args.act_fun)
     #endregion
     #region 修改参数以便人工测试（自动测试时注释掉，否则参数无法自动变化）
     # trainParams["lr"] = 5e-4
