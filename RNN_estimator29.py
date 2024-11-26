@@ -36,11 +36,11 @@ class ActorRNN(nn.Module):
             if type_activate.lower() == 'relu' : 
                 self.fc1.append(nn.ReLU())
             elif type_activate.lower() == 'leaky_relu' : 
-                self.fc1.append(nn.LeakyReLU())
+                self.fc1.append(nn.LeakyReLU(negative_slope=0.05))
             elif type_activate.lower() == 'prelu' : 
                 self.fc1.append(nn.PReLU())
             elif type_activate.lower() == 'elu' : 
-                self.fc1.append(nn.ELU())
+                self.fc1.append(nn.ELU(alpha=1.0))
             elif type_activate.lower() == 'tanh' : 
                 self.fc1.append(nn.Tanh())
             elif type_activate.lower() == 'sigmoid' : 
@@ -67,11 +67,11 @@ class ActorRNN(nn.Module):
             if type_activate.lower() == 'relu' : 
                 self.fc2.append(nn.ReLU())
             elif type_activate.lower() == 'leaky_relu' : 
-                self.fc2.append(nn.LeakyReLU())
+                self.fc2.append(nn.LeakyReLU(negative_slope=0.05))
             elif type_activate.lower() == 'prelu' : 
                 self.fc1.append(nn.PReLU())
             elif type_activate.lower() == 'elu' : 
-                self.fc1.append(nn.ELU())
+                self.fc1.append(nn.ELU(alpha=1.0))
             elif type_activate.lower() == 'tanh' : 
                 self.fc2.append(nn.Tanh())
             elif type_activate.lower() == 'sigmoid' : 
@@ -119,15 +119,19 @@ class ActorRNN(nn.Module):
         return P_next_inv, h_next, hidden
     # end function forward
     def weight_init(self) : 
+        if self.type_activate != "elu" and self.type_activate != "prelu":
+            nonlinearity = self.type_activate
+        else :
+            nonlinearity = "leaky_relu"
         for fc in self.fc1 : 
             if isinstance(fc, nn.Linear) : 
-                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=self.type_activate)
+                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=nonlinearity)
         for fc in self.fc2 : 
             if isinstance(fc, nn.Linear) : 
-                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=self.type_activate)
+                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=nonlinearity)
         for fc in self.out : 
             if isinstance(fc, nn.Linear) : 
-                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=self.type_activate)
+                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=nonlinearity)
     # end function weight_init
     def detachHidden(self, hidden):
         if isinstance(hidden, tuple):
@@ -318,7 +322,7 @@ class RL_estimator(est.Estimator):
                 Ht = self.model.H(x=self.model.f(x=x_hat_seq[t]))
                 Rinv = fun.inv(estParams["R"])
                 c = c + xt.T@Ft.T@Ptp1_inv@Ft@xt - xtp1.T@Ptp1_inv@xtp1 + dytp1.T@Rinv@dytp1 + 2*xt.T@Ft.T@Ht.T@Rinv@dytp1
-                target_c_seq.append(c.item())
+                target_c_seq.append(c.reshape(-1))
             input_seq = torch.FloatTensor(np.stack(input_seq)).unsqueeze(0).to(self.device)
             Pinv_seq, c_seq, _ = self.policy.forward(input_seq, None)
             target_Pinv_seq = torch.FloatTensor(np.stack(target_Pinv_seq)).unsqueeze(0).to(self.device)
@@ -377,6 +381,8 @@ def main():
         agent.initialize(x_batch_init=x_batch_init, y_batch_init=y_batch_init, estParams=estParams)
         torch.save(agent.policy.state_dict(), initNetName)
     #endregion
+    # 加载模型
+    # agent.load_network("net/RNN_net(1)")
     #region 相关训练参数打印以及模型训练（训练结束后会自动进行测试）
     logfile = fun.LogFile(fileName="output/log.txt", rename_option=True)
     print("estimator params: ")
@@ -396,10 +402,8 @@ def main():
     agent.train(x_batch_test=x_batch_test, y_batch_test=y_batch_test, trainParams=trainParams, estParams=estParams)
     logfile.endLog()
     #endregion
-    #region 加载模型并测试（不训练时才需要加载）
-    # agent.load_network("net/RNN_net(1)")
+    # 测试
     # simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
-    #endregion
 # end function main
 
 if __name__ == '__main__':
