@@ -41,33 +41,41 @@ def plotTrajectory(x_seq, x_hat_seq, STATUS="None") -> None:
     fig, axs = plt.subplots(ds,1)
     for i in range(ds) : 
         ax = axs[i] if ds > 1 else axs
-        ax.plot(t_seq, x_seq.T[i], 'o', label='x_real', color='blue', linestyle='-')
-        ax.plot(t_seq, x_hat_seq.T[i], 'o', label='x_hat', color='red', linestyle='-')
+        ax.plot(t_seq, x_seq.T[i], label='x_real', color='blue', linestyle='-') #, 'o'
+        ax.plot(t_seq, x_hat_seq.T[i], label='x_hat', color='red', linestyle='-')#, 'o'
         ax.set_xlim(0, max_steps)
         ax.set_ylabel(f'x{i+1}')
+        ax.xaxis.set_visible(False)
+        ax.grid(True)
     # axs[0].set_title(f'{STATUS}')
     if ds > 1:
         axs[0].set_title(f'{STATUS}状态估计效果图')
         axs[0].legend()
         axs[-1].set_xlabel('时间步')
+        axs[-1].xaxis.set_visible(True)
     else :
         axs.set_title(f'{STATUS}状态估计效果图')
         axs.legend()
         axs.set_xlabel('时间步')
-    plt.grid(True)
+        axs.xaxis.set_visible(True)
 
-    fig, ax = plt.subplots()
+    fig, axs = plt.subplots(ds,1)
     color = ['b','g','r','c','m','y','k']
     for i in range(ds) : 
-        ax.plot(t_seq, error[:,i], 'o', label=f'x{i+1}', color=color[i], linestyle='--')
-        ax.plot(t_seq, np.average(error[:,i])*np.ones_like(t_seq), color=color[i])
-    ax.set_xlim(0, max_steps)
-    ax.set_xlabel('时间步')
-    ax.set_ylabel('绝对值误差')
-    # ax.set_title(f'MSE = {MSE}')
-    ax.set_title('绝对值误差')
-    ax.legend()
-    plt.grid(True)
+        ax = axs[i] if ds > 1 else axs
+        ax.plot(t_seq, error[:,i], label=f'x{i+1}', color='red', linestyle='--') #, 'o'
+        ax.plot(t_seq, np.average(error[:,i])*np.ones_like(t_seq), color='blue')
+        ax.legend()
+        ax.xaxis.set_visible(False)
+        ax.grid(True)
+    if ds > 1:
+        axs[0].set_title(f'{STATUS}误差绝对值')
+        axs[-1].set_xlabel('时间步')
+        axs[-1].xaxis.set_visible(True)
+    else :
+        axs.set_title(f'{STATUS}误差绝对值')
+        axs.set_xlabel('时间步')
+        axs.xaxis.set_visible(True)
 
     # fig = plt.figure()
     # ax = plt.axes(projection='3d')
@@ -82,8 +90,13 @@ def plotTrajectory(x_seq, x_hat_seq, STATUS="None") -> None:
     # ax.set_title('状态轨迹')
 
 if __name__ == "__main__" : 
-    rewardSeq = [
-    ]
+    # rewardSeq = [
+    # ]
+    # plotReward(rewardSeq) #, filename="picture/train_RMSE.png"
 
-    plotReward(rewardSeq) #, filename="picture/train_RMSE.png"
+    from gendata import getData
+    x_batch, y_batch = getData(modelName="Continuous2", steps=40000, episodes=1, randSeed=10086)
+    x_seq = x_batch[0]
+    plotTrajectory(x_seq=x_seq, x_hat_seq=x_seq)
+
     plt.show()
