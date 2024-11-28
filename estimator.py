@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.optimize import least_squares
 from scipy.stats import multivariate_normal
+from scipy.linalg import expm
 
 from functions import block_diag, inv, delete_empty, isConverge
 
@@ -67,6 +68,136 @@ class EKF(Estimator):
     def estimate(self, y, Q, R, u=None):
         self.predict(Q=Q, u=u)
         self.update(y=y, R=R)
+
+class EKFForQuat(Estimator) :
+    from model import Continuous2
+    def __init__(self, model:Continuous2, x0_hat=None, P0_hat=None) -> None:
+        self.model = model
+        super().__init__(name="EKFForQuat", x0_hat=x0_hat, P0_hat=P0_hat)
+
+    def reset(self, x0_hat, P0_hat):
+        self.model.q = None
+        self.lamda = np.zeros((3,3))
+        self.mu = np.zeros((3,3))
+        self.r_a = np.zeros((3,3))
+        if hasattr(self, "Q"):del self.Q
+        if hasattr(self, "y_pre"):del self.y_pre
+        super().reset(x0_hat, P0_hat)
+
+    def estimate(self, y, Q, R, u=None):
+        if not hasattr(self, "y_pre") :
+            self.y_pre = y # y_pre，注意在reset中删去
+            self.y_hat = y
+            return np.zeros((9,))
+        if self.model.q is None : # 计算四元数q的初始估计
+            y_a = y[3:6]
+            y_m = y[6:9]
+            roll_accmag_0 = np.arctan2(y_a[1], y_a[2])
+            pitch_accmag_0 = -np.arctan2(y_a[0], np.sqrt(y_a[1]**2 + y_a[2]**2))
+            C_n_b__0 = self.model.rot(angle=0, axis="z") @ self.model.rot(angle=pitch_accmag_0, axis="Y") @ self.model.rot(angle=roll_accmag_0, axis="X")
+            y_m_0_NEW = C_n_b__0.T @ y_m.reshape(-1,1)
+            yaw_accmag_0 = -np.arctan2(y_m_0_NEW[1], y_m_0_NEW[0]).item()
+            # q_m: Estimated-from-measurements quaternion (i.e., q from y_g (measured gyro output))
+            self.model.q = self.model.RotMat2quat(self.model.rot(angle=yaw_accmag_0, axis="Z") @
+                                                  self.model.rot(angle=pitch_accmag_0, axis="Y") @
+                                                  self.model.rot(angle=roll_accmag_0, axis="X"))
+        omega = y[:3] # 由于有了qe中间值，可以直接把yg当做角速度数据而无需减掉状态量中的gyro偏差
+        dt = self.model.sampleTime
+        # predict
+        F = self.model.F(x=self.x_hat, omega=omega)
+        self.model.q_step(omega_pre=self.y_pre[0:3], omega=omega)
+        self.x_hat = self.model.f(x=self.x_hat, omega=omega)
+        self.P_hat = F@self.P_hat@F.T
+        A = np.vstack(( np.hstack(( -self.model.skewSymmetric(omega), -0.5*np.eye(3), np.zeros((3,3)) )), np.zeros((6,9)) ))
+        if not hasattr(self, "Q") :
+            self.Q = Q # 初始时刻Q，注意在reset中删去
+        self.Q = self.Q*dt + 0.5*A@self.Q + 0.5*self.Q@A.T
+        if self.Q.size != 0 : self.P_hat += self.Q
+        # correct(1)
+        #0.
+        Cnb = self.model.quat2RotMat(self.model.q)
+        #1.
+        H_a = self.model.H1()
+        #2.个人注：实际上就是加速度偏差项
+        z_a = y[3:6] - Cnb@self.model.g
+        #3.Sab
+        # if abs(np.linalg.norm(y[3:6]) - np.linalg.norm(self.model.g)) < 0.25 : 
+        #     Q_hat_a_b = np.zeros((3,3))
+        # else :
+        #     Q_hat_a_b = 10*np.eye(3)
+        # Suh
+        R_a = R[3:6,3:6]
+        Q_hat_a_b = self.estimateExtAccCov_Suh(H_a=H_a, R_a=R_a)
+        #4.
+        S_a = H_a @ self.P_hat @ H_a.T + R_a + Q_hat_a_b
+        #5.
+        K_a = self.P_hat @ H_a.T @ inv(S_a)
+        #6.
+        r_a = z_a - H_a @ self.x_hat
+        self.r_a[1:3] = self.r_a[0:2]
+        self.r_a[0] = r_a
+        #7.
+        self.x_hat = self.x_hat + K_a @ r_a
+        #8.
+        temp = np.eye(9) - K_a @ H_a
+        self.P_hat = temp @ self.P_hat @ temp.T + K_a @ (R_a + Q_hat_a_b) @ K_a.T
+        #9.
+        self.model.q += self.model.Omega(self.x_hat[:3]) @ self.model.q
+        self.model.q = self.model.q / np.linalg.norm(self.model.q) # 四元数范数归一化
+        if self.model.q[0] < 0: self.model.q = -self.model.q # 确保四元数的标量位大于0
+        self.x_hat[:3] = np.zeros_like(self.x_hat[:3]) ## 个人注：为什么？
+        # correct(2)
+        #0.个人注：这里确实得再算一遍因为上面更新了q
+        Cnb = self.model.quat2RotMat(self.model.q)
+        #1.
+        H_m = self.model.H2()
+        #2.
+        z_m = y[6:9] - Cnb@self.model.m
+        #3.
+        P_m = block_diag(( self.P_hat[:3,:3], np.zeros((6,6)) ))
+        #4.
+        R_m = R[6:9,6:9]
+        S_m = H_m @ P_m @ H_m.T + R_m
+        #5.
+        r_3 = Cnb @ np.array((0,0,1)).reshape(-1,1)
+        Suh = block_diag(( r_3@r_3.T, np.zeros((6,6)) ))
+        K_m = Suh @ P_m @ H_m.T @ inv(S_m)
+        #6.
+        r_m = z_m - H_m @ self.x_hat
+        #7.
+        self.x_hat = self.x_hat + K_m @ r_m
+        #8.
+        temp = np.eye(9) - K_m @ H_m
+        self.P_hat = temp @ self.P_hat @ temp.T + K_m @ R_m @ K_m.T
+        # Increment time istant
+        self.y_pre = y
+        return Q_hat_a_b.reshape(-1)
+
+    def estimateExtAccCov_Suh(self, H_a, R_a):
+        U = 0
+        for r_a in self.r_a:
+            r_a = r_a.reshape(-1,1)
+            U += r_a @ r_a.T / 3
+        
+        self.lamda[1:3] = self.lamda[0:2]
+        self.mu[1:3] = self.mu[0:2]
+
+        vals, vecs = np.linalg.eigh(U)
+        self.lamda[0] = vals
+        u = vecs.T # 分解出来的是列向量，转成行向量处理
+
+        M = H_a @ self.P_hat @ H_a.T + R_a
+        for i in range(3):
+            ui = u[i].reshape(-1,1)
+            self.mu[0,i] = ui.T @ M @ ui
+        
+        Q_hat_a_b = np.zeros((3,3)) # 默认mode为1
+        if max([max(err) for err in (self.lamda - self.mu)]) >= 0.1: # mdoe=2    0.1是gamma，可调参数
+            Q_hat_a_b = 0
+            for i in range(3):
+                ui = u[i].reshape(-1,1)
+                Q_hat_a_b += max(self.lamda[0,i]-self.mu[0,i], 0) * ui @ ui.T
+        return Q_hat_a_b
 
 class MHE(Estimator):
     def __init__(self, f_fn, h_fn, F_fn, H_fn, window, x0_hat=None, P0_hat=None) -> None:
@@ -261,15 +392,15 @@ class Quadratic() :
         ds = x.size // (num_obs+1)
 
         f = np.array(x[:ds] - x0_bar)[np.newaxis,:]
-        M = np.copy(P_inv) * gamma
+        M = np.copy(P_inv)
         for i in range(num_obs) : 
             f = np.hstack((f, x[ds*(i+1):ds*(i+2)]-self.f_fn(x[ds*(i):ds*(i+1)])[np.newaxis,:], 
                               y_seq[i]-self.h_fn(x[ds*(i+1):ds*(i+2)])[np.newaxis,:]))
-            M = block_diag((M, inv(Q), inv(R)))
+            M = block_diag((M * gamma, inv(Q), inv(R)))
         
         if xend is not None : 
             f = np.hstack((f, (xend-self.f_fn(x[-ds:]))[np.newaxis,:]))
-            M = block_diag((M, inv(Q)))
+            M = block_diag((M * gamma, inv(Q)))
         
         L = np.linalg.cholesky(M)
         return (f@L).reshape(-1)
@@ -280,17 +411,17 @@ class Quadratic() :
         jadd = lambda x0, x1 : np.vstack((np.hstack((-self.F_fn(x0), np.eye(ds))), np.pad(-self.H_fn(x1), ((0,0),(ds,0)))))
 
         J = np.eye(ds)
-        M = P_inv[:] * gamma
+        M = P_inv[:]
         for i in range(num_obs) : 
             J = np.pad(J, ((0,0), (0,ds)))
             Jadd = np.pad(jadd(x[ds*i:ds*(i+1)], x[ds*(i+1):ds*(i+2)]), ((0,0), (i*ds,0)))
             J = np.vstack((J, Jadd))
-            M = block_diag((M, inv(Q), inv(R)))
+            M = block_diag((M * gamma, inv(Q), inv(R)))
 
         if xend is not None : 
             Jadd = np.pad(-self.F_fn(xend), ((0,0),(ds*num_obs,0)))
             J = np.vstack((J, Jadd))
-            M = block_diag((M, inv(Q)))
+            M = block_diag((M * gamma, inv(Q)))
 
         L = np.linalg.cholesky(M).T
         return L@J

@@ -15,13 +15,13 @@ def generate_data(model, modelParam, steps, randSeed):
         initial_state = modelParam["x0_mu"] + np.random.multivariate_normal(np.zeros_like(modelParam["x0_mu"]), modelParam["P0"])
     # 生成噪声序列
     if "Q" not in modelParam or modelParam["Q"] is None:
-        disturb_list = np.zeros((steps, model.dim_state))
+        disturb_list = [None for _ in range(steps)]
     else : 
         if "disturbMu" not in modelParam or modelParam["disturbMu"] is None:
             modelParam["disturbMu"] = np.zeros(model.dim_state)
         disturb_list = np.random.multivariate_normal(modelParam["disturbMu"], modelParam["Q"], steps)
     if "R" not in modelParam or modelParam["R"] is None:
-        noise_list = np.zeros((steps, model.dim_obs))
+        noise_list = [None for _ in range(steps)]
     else : 
         if "noiseMu" not in modelParam or modelParam["noiseMu"] is None:
             modelParam["noiseMu"] = np.zeros(model.dim_obs)
@@ -36,6 +36,10 @@ def generate_data(model, modelParam, steps, randSeed):
         x = x_next
         x_seq.append(x_next)
         y_seq.append(y_next)
+    # 额外的外部扰动（未知且不希望有的）
+    if hasattr(model, "ext_y") :
+        ext_y = model.ext_y()
+        y_seq = [y+e_y for y,e_y in zip(y_seq, ext_y)]
     return x_seq, y_seq
 
 # 生成并保存数据轨迹
@@ -94,4 +98,4 @@ def getData(modelName, steps, episodes, randSeed):
     return x_batch, y_batch
 
 if __name__ == "__main__":
-    generate_trajectories(modelName="Continuous1", steps=100, episodes=50, randSeed=10086)
+    generate_trajectories(modelName="Continuous2", steps=40000, episodes=1, randSeed=10086)

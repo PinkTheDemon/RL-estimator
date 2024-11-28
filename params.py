@@ -1,5 +1,6 @@
 import argparse
 import numpy as np
+from functions import block_diag
 
 # 解析输入参数
 def parseParams():
@@ -22,7 +23,7 @@ def getModelParams(modelName):
             "x0_mu": np.array([10, 10]),
             "P0": np.diag((1., 1.)),
             "Q": np.diag((1e0, 1e0)),
-            "R": np.array([[1e-2]]),
+            "R": np.array([[1e0]]),
             "disturbMu": None,
             "noiseMu": None,
         }
@@ -37,6 +38,15 @@ def getModelParams(modelName):
             "disturbMu": None,
             "noiseMu": None,
         }
+    elif modelName == "Continuous2":
+        modelParams = {
+            "x0_mu": np.array([0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            "P0": None,
+            "Q": None,
+            "disturbMu": None,
+            "R": block_diag(( 0.000036*np.eye(3), 0.002304*np.eye(3), 4*np.eye(3) )),
+            "noiseMu": np.array((-0.019, 0.013, -0.006, 0.07, 0.033, -0.044, 0, 0, 0)),
+        }
     return modelParams
 
 # 状态估计的初始参数
@@ -45,8 +55,8 @@ def getEstParams(modelName, **kwargs):
         estParams = {
             "x0_hat": np.array([0, 0]),
             "P0_hat": np.diag((10., 10.)),
-            "Q": np.array([[1,0],[1,0]]),
-            "R": np.array([[0.1]]),
+            "Q": np.array([[1e-2,0],[0,1e-2]]),
+            "R": np.array([[0.01]]),
         }
     elif modelName == "Continuous1":
         estParams = {
@@ -55,6 +65,13 @@ def getEstParams(modelName, **kwargs):
             "Q": np.diag((1e-2, 1e-2, 1e-2)),
             "R": np.diag((1e-2, 1e-2)),
         }
+    elif modelName == "Continuous2":
+        estParams = {
+            "x0_hat": np.array([0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            "P0_hat": block_diag(( 4e-2*np.eye(3), 1e-6*np.eye(3), 4e-4*np.eye(3) )),
+            "Q": block_diag(( 9e-6*np.eye(3), 1e-6*np.eye(3), 1e-6*np.eye(3) )),
+            "R": block_diag(( 0.000036*np.eye(3), 0.002304*np.eye(3), 4*np.eye(3) )),
+        }
     estParams |= kwargs
     return estParams
 
@@ -62,7 +79,7 @@ def getTrainParams(estorName, **kwargs):
     if estorName == "RL_estimator":
         trainParams = {
             "steps": 100,
-            "episodes": 500,
+            "episodes": 300,
             "randSeed": 0,
             "lr": 5e-3,
             "lr_min": 1e-5,
