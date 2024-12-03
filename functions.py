@@ -38,6 +38,7 @@ def inv(M:np.ndarray) :
     elif np.linalg.matrix_rank(M) < M.shape[0]: # 不满秩方阵
         U, S, V = np.linalg.svd(M)
         S = np.diag([1/s if s != 0 else 0 for s in S])
+        S = np.pad(S, ((0,0), (0,U.shape[0]-V.shape[0])))
         M_inv = V.T @ S @ U.T
     else :
         L = np.linalg.cholesky(M)
@@ -115,7 +116,7 @@ class LogFile() :
 
 
 def P3dtoP4d(x_bar, P3d, h3d=None) : 
-    x_bar = x_bar[np.newaxis,:]
+    x_bar = x_bar.reshape(1,-1)
     P4d = np.array([[(x_bar@P3d@x_bar.T).item(), -(x_bar@P3d[:,0]).item(), -(x_bar@P3d[:,1]).item(), -(x_bar@P3d[:,2]).item()],
                     [-(P3d[0]@x_bar.T).item(),    P3d[0,0], P3d[0,1], P3d[0,2]],
                     [-(P3d[1]@x_bar.T).item(),    P3d[1,0], P3d[1,1], P3d[1,2]],
