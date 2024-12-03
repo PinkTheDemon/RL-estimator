@@ -2,6 +2,8 @@
 [!.a-zA-Z]*
 # 测试代码的文件
 try.py
+# 数据文件
+*.mat
 # 文件夹
 /data
 /output
