@@ -1,9 +1,10 @@
 import numpy as np
-from scipy.optimize import least_squares
+from scipy.optimize import least_squares, minimize
 from scipy.stats import multivariate_normal
 from scipy.linalg import expm
 
 from functions import block_diag, inv, delete_empty, isConverge
+from model import Continuous2
 
 class Estimator:
     def __init__(self, name, x0_hat=None, P0_hat=None) -> None:
@@ -70,7 +71,6 @@ class EKF(Estimator):
         self.update(y=y, R=R)
 
 class EKFForQuat(Estimator) :
-    from model import Continuous2
     def __init__(self, model:Continuous2, x0_hat=None, P0_hat=None) -> None:
         self.model = model
         super().__init__(name="EKFForQuat", x0_hat=x0_hat, P0_hat=P0_hat)
@@ -120,14 +120,16 @@ class EKFForQuat(Estimator) :
         H_a = self.model.H1()
         #2.个人注：实际上就是加速度偏差项
         z_a = y[3:6] - Cnb@self.model.g
-        #3.Sab
-        # if abs(np.linalg.norm(y[3:6]) - np.linalg.norm(self.model.g)) < 0.25 : 
-        #     Q_hat_a_b = np.zeros((3,3))
-        # else :
-        #     Q_hat_a_b = 10*np.eye(3)
+        #3.Sab 影响性能
+        if abs(np.linalg.norm(y[3:6]) - np.linalg.norm(self.model.g)) < 0.25 : 
+            Q_hat_a_b = np.zeros((3,3))
+        else :
+            Q_hat_a_b = 10*np.eye(3)
         # Suh
         R_a = R[3:6,3:6]
-        Q_hat_a_b = self.estimateExtAccCov_Suh(H_a=H_a, R_a=R_a)
+        # Q_hat_a_b = self.estimateExtAccCov_Suh(H_a=H_a, R_a=R_a)
+        # zero
+        # Q_hat_a_b = np.zeros((3,3))
         #4.
         S_a = H_a @ self.P_hat @ H_a.T + R_a + Q_hat_a_b
         #5.
@@ -145,7 +147,7 @@ class EKFForQuat(Estimator) :
         self.model.q += self.model.Omega(self.x_hat[:3]) @ self.model.q
         self.model.q = self.model.q / np.linalg.norm(self.model.q) # 四元数范数归一化
         if self.model.q[0] < 0: self.model.q = -self.model.q # 确保四元数的标量位大于0
-        self.x_hat[:3] = np.zeros_like(self.x_hat[:3]) ## 个人注：为什么？
+        self.x_hat[:3] = np.zeros_like(self.x_hat[:3]) ## 个人注：为什么？这个必须要有，对性能影响很大
         # correct(2)
         #0.个人注：这里确实得再算一遍因为上面更新了q
         Cnb = self.model.quat2RotMat(self.model.q)
@@ -153,15 +155,15 @@ class EKFForQuat(Estimator) :
         H_m = self.model.H2()
         #2.
         z_m = y[6:9] - Cnb@self.model.m
-        #3.
-        P_m = block_diag(( self.P_hat[:3,:3], np.zeros((6,6)) ))
+        #3. 个人注：P_m实际上没用，因为H_m的后6列本来就为0
+        # P_m = block_diag(( self.P_hat[:3,:3], np.zeros((6,6)) ))
         #4.
         R_m = R[6:9,6:9]
-        S_m = H_m @ P_m @ H_m.T + R_m
-        #5.
-        r_3 = Cnb @ np.array((0,0,1)).reshape(-1,1)
+        S_m = H_m @ self.P_hat @ H_m.T + R_m
+        #5. r_3限制磁力计的修正仅作用于偏航分量，这个影响不是很大
+        r_3 = Cnb[:,2].reshape(-1,1)#np.array((1,1,1))
         Suh = block_diag(( r_3@r_3.T, np.zeros((6,6)) ))
-        K_m = Suh @ P_m @ H_m.T @ inv(S_m)
+        K_m = Suh @ self.P_hat @ H_m.T @ inv(S_m)
         #6.
         r_m = z_m - H_m @ self.x_hat
         #7.
@@ -236,6 +238,134 @@ class MHE(Estimator):
         self.x0_bar_seq.append(self.x_hat) # 要不用新的就都不用新的，训练的时候是不用新的所以测试也不应该用新的
         if len(self.x0_bar_seq) > self.window : del self.x0_bar_seq[0]
 
+class MHEForQuat(Estimator):
+    def __init__(self, model:Continuous2, window, x0_hat=None, P0_hat=None) -> None:
+        self.model = model
+        self.window = window
+        self.Wm = np.eye(3)
+        self.Wv = np.eye(3)
+        self.Wu = np.eye(3)
+        super().__init__("MHEForQuat", x0_hat, P0_hat)
+
+    def reset(self, x0_hat, P0_hat):
+        self.x_hat = x0_hat
+        self.P_hat = P0_hat
+        self.y_seq = []
+        self.x0_bar_seq = [x0_hat]
+        if hasattr(self, "Q"):del self.Q
+        if hasattr(self, "y_pre"):del self.y_pre
+        self.model.q = None
+
+    def estimate(self, y, W0=None, u=None, gamma=1.0, xend=None, Q=None, R=None):
+        # 定义W0
+        ds = 7
+        W0 = np.eye(ds)
+        #region 数据处理
+        if self.model.q is None : # y0用来计算四元数q的初始估计
+            y_a = y[3:6]
+            y_m = y[6:9]
+            roll_accmag_0 = np.arctan2(y_a[1], y_a[2])
+            pitch_accmag_0 = -np.arctan2(y_a[0], np.sqrt(y_a[1]**2 + y_a[2]**2))
+            C_n_b__0 = self.model.rot(angle=0, axis="z") @ self.model.rot(angle=pitch_accmag_0, axis="Y") @ self.model.rot(angle=roll_accmag_0, axis="X")
+            y_m_0_NEW = C_n_b__0.T @ y_m.reshape(-1,1)
+            yaw_accmag_0 = -np.arctan2(y_m_0_NEW[1], y_m_0_NEW[0]).item()
+            # q_m: Estimated-from-measurements quaternion (i.e., q from y_g (measured gyro output))
+            self.model.q = self.model.RotMat2quat(self.model.rot(angle=yaw_accmag_0, axis="Z") @
+                                                  self.model.rot(angle=pitch_accmag_0, axis="Y") @
+                                                  self.model.rot(angle=roll_accmag_0, axis="X"))
+            self.y_hat = y
+            self.y_seq.append(y)
+            self.x_hat = np.hstack(( self.model.q, np.zeros((3,))))
+            self.x0_bar_seq[0] = self.x_hat
+            return 
+        # 保存y到y_seq
+        self.y_seq.append(y)
+        if len(self.y_seq) > self.window+1 : del self.y_seq[0]
+        #endregion
+        if W0 is None : W0 = inv(self.P_hat)
+        result = minForQuat(model=self.model, x0_bar=self.x0_bar_seq[0], y_seq=self.y_seq, W0=W0, Wm=self.Wm, Wv=self.Wv, Wu=self.Wu, gamma=gamma, xend=xend)
+        self.x_hat = result.x[-ds:]
+        self.model.q = self.x_hat[:4]
+        self.y_hat = None
+        # 更新P: 不更新
+        # 更新x0_bar_seq
+        self.x0_bar_seq.append(self.x_hat)
+        if len(self.x0_bar_seq) > self.window: del self.x0_bar_seq[0]
+        pass
+
+def minForQuat(model:Continuous2, x0_bar, y_seq, W0, Wm, Wv, Wu, x0=None, gamma=1.0, xend=None):
+    # 生成初始值
+    if x0 is None : 
+        x0 = [x0_bar]
+        for i in range(len(y_seq)-1) : 
+            x0.append(np.hstack(( model.q_step(q=x0[i][0:4], omega_pre=y_seq[i][0:3], omega=y_seq[i+1][0:3]), x0[i][4:7] )))
+    x0 = np.array(x0).reshape(-1)
+    # 参数打包
+    params = (model, x0_bar, y_seq, W0, Wm, Wv, Wu, gamma, xend)
+    # 约束条件
+    cons = {
+        "type": "eq",
+        "fun": consForQuat,
+        "jac": consJacForQuat,
+    }
+    # 计算最小二乘问题
+    result = minimize(fun=resForQuat, x0=x0, args=params, method='SLSQP', constraints=cons, options={"maxiter":10,}) # jac先不写了
+    return result
+
+def resForQuat(x, model:Continuous2, x0_bar, y_seq, W0, Wm, Wv, Wu, gamma=1.0, xend=None):
+    num_y = len(y_seq)
+    ds = 7
+
+    f = (x[0:ds] - x0_bar)[np.newaxis,:]
+    W = np.copy(W0)
+    f1 = lambda x, y: (y[6:9] - model.quat2RotMat(x[:4])@model.m)[np.newaxis,:]
+    f2 = lambda x1, x2, y: (y[0:3] - model.sampleTime*0.25*inv(model.Ksi(x1[:4]) + model.Ksi(x2[:4]))@(x2[:4]-x1[:4]) - x1[4:7])[np.newaxis,:]
+    f3 = lambda x1, x2: (x2[4:7] - x1[4:7])[np.newaxis,:]
+
+    for i in range(num_y-1) :
+        f = np.hstack(( f, f1(x[(i+1)*ds:(i+2)*ds],y_seq[i+1]), 
+                           f2(x[i*ds:(i+1)*ds],x[(i+1)*ds:(i+2)*ds],y_seq[i]), 
+                           f3(x[i*ds:(i+1)*ds],x[(i+1)*ds:(i+2)*ds]) ))
+        W = block_diag(( W*gamma, Wm, Wv, Wu ))
+
+    if xend is not None:
+        f = np.hstack(( f, f2(x[-ds:],xend,y_seq[-1]), f3(x[-ds:],xend) ))
+        W = block_diag(( W*gamma, Wv, Wu ))
+
+    # L = np.linalg.cholesky(W)
+    return f@W@f.T
+
+def jacForQuat(x, model:Continuous2, x0_bar, y_seq, W0, Wm, Wv, Wu, gamma=1.0, xend=None):
+    num_y = len(y_seq)
+    ds = 7
+
+    J = np.eye(7)
+    W = np.copy(W0)
+    Jadd = lambda x1, x2 : np.vstack(( np.pad(model.Cnb_prime(x2)@model.m, pad_width=((0,0),(ds,0))),
+                                       model.omega_hat_prime(x1, x2)))
+
+    for i in range(num_y-1):
+        J = np.pad(J, pad_width=((0,0),(0,ds)))
+
+def consForQuat(x):
+    ds = 7
+    num_x = x.size // 7
+
+    fc = np.empty((0,))
+    for i in range(num_x):
+        fc = np.hstack(( fc, np.linalg.norm(x[i*ds:(i+1)*ds])-1 ))
+    return fc
+
+def consJacForQuat(x):
+    ds = 7
+    num_x = x.size // 7
+
+    Jac = np.empty((0, x.size))
+    for i in range(num_x):
+        Jac = np.vstack(( Jac, 2*np.pad(x[i*ds:(i+1)*ds][np.newaxis,:], ((0,0),(i*ds, (num_x-i-1)*ds))) ))
+    return Jac
+
+#region not use
 # def IEKF(x, P, y_next, Q, R, times=10):
 #     # predict
 #     F = dyn.F(x)
@@ -309,7 +439,7 @@ class MHE(Estimator):
 #     P_next_hat = P_next_pre - K @ P_yy @ K.T
 
 #     return x_next_hat.reshape(-1), P_next_hat
-
+#endregion
 
 def NLSF_uniform(P_inv, y_seq, Q, R, f, h, F, H, mode:str="quadratic", x0=None, **args) : 
     if "sumofsquares" in mode.lower() : 

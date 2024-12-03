@@ -99,7 +99,7 @@ class Continuous1(Model):
 
 # 四元数姿态估计
 class Continuous2(Model):
-    def __init__(self, sampleTime=0.005, N_sample=40000, q0=np.array([0.94563839, -0.03449911,  0.21051564,  0.24548119]), 
+    def __init__(self, sampleTime=0.02, N_sample=10000, q0=np.array([0.94563839, -0.03449911,  0.21051564,  0.24548119]), 
                  g=np.array((0,0,9.805185)), m=np.array((23.4820, 0, -40.8496))) -> None:
         super().__init__("Continuous2", 9, 9)
         self.modelErr = False
@@ -121,19 +121,27 @@ class Continuous2(Model):
         x = self.F(x=x, omega=omega) @ x
         return x
 
-    def q_step(self, omega_pre, omega=None):
+    def q_step(self, omega_pre, omega=None, q=None):
         dt = self.sampleTime
         # 参考代码的三阶近似
         if omega is None: omega = omega_pre
-        self.q = (np.eye(4) + 3/4 * self.Omega(omega) * dt - 1/4 * self.Omega(omega_pre) * dt \
+        if q is None: 
+            q = self.q
+            ret = False
+        else : ret = True
+        q = (np.eye(4) + 3/4 * self.Omega(omega) * dt - 1/4 * self.Omega(omega_pre) * dt \
             - 1/6 * np.linalg.norm(omega)**2 * dt**2 - 1/24 * self.Omega(omega) @ self.Omega(omega_pre) * dt**2 \
-            - 1/48 * np.linalg.norm(omega)**2 * self.Omega(omega) * dt**3) @ self.q
+            - 1/48 * np.linalg.norm(omega)**2 * self.Omega(omega) * dt**3) @ q
         # 微分方程解
         # self.q = expm(0.5*self.Omega(omega_pre)*dt) @ self.q
         # 变号以及归一化
-        if self.q[0] < 0:
-            self.q = -self.q
-        self.q = self.q / np.linalg.norm(self.q)
+        if q[0] < 0:
+            q = -q
+        q = q / np.linalg.norm(q)
+        if not ret :
+            self.q = q
+        else :
+            return q
 
     def F(self, x, omega, **args) : 
         dt = self.sampleTime
@@ -217,7 +225,7 @@ class Continuous2(Model):
             elif (14/20 * N <= n and n < 17/20 * N) :
                 w =np.array(((n - 8/20 * N + 2) / N * (10), (n - 8/20 * N + 2) / N * (-30), (n - 8/20 * N + 2) / N * (-20)))
             
-            elif (17/20 * N <= n and n < N) :
+            elif (17/20 * N <= n and n <= N) :
                 w =np.array((0, 0, 0))
         return w
 
@@ -228,6 +236,18 @@ class Continuous2(Model):
             [w[1], -w[2],  0,  w[0]],
             [w[2],  w[1], -w[0],  0]
         ])
+
+    def Ksi(self, q) :
+        return np.array([
+            [-q[1], -q[2], -q[3]],
+            [q[0], -q[3], q[2]],
+            [q[3], q[0], -q[1]],
+            [-q[2], q[1], q[0]]
+        ])
+
+    def omega_hat_prime(self, q1, q2) :
+        # omega_hat = inv(Ksi(q1) + Ksi(q2)) @ (q2 - q1)
+        pass
 
     def rot(self, angle, axis:str) :
         '''angle: rad'''
@@ -299,8 +319,8 @@ class Continuous2(Model):
         q = np.array((q[3], q[0], q[1], q[2]))
         return q
 
-    def quat2RotMat(self, q) :
-        q = q / np.linalg.norm(q) # 四元数范数归一化
+    def quat2RotMat(self, q) : # Cnb(q)
+        # q = q / np.linalg.norm(q) # 四元数范数归一化
         q4, q1, q2, q3 = q
         C = np.array([
             [q1*q1 - q2*q2 - q3*q3 + q4*q4,   2 * (q1*q2 + q3*q4),              2 * (q1*q3 - q2*q4)],
@@ -309,34 +329,52 @@ class Continuous2(Model):
         ])
         return C
 
+    def Cnb_prime(self, q) :
+        q4, q1, q2, q3 = q
+        C_hat = 2*np.array([
+            [
+                [q1, q2, q3],
+                [q2, -q1, q4],
+                [q3, -q4, -q1]
+            ],
+            [
+                [-q2, q1, -q4],
+                [q1, q2, q3],
+                [q4, q3, -q2]
+            ],
+            [
+                [-q3, q4, q1],
+                [-q4, -q3, q2],
+                [q1, q2, q3],
+            ],
+            [
+                [q4, q3, -q2],
+                [-q3, q4, q1],
+                [q2, -q1, q4]
+            ]
+        ])
+        return C_hat
+
     def ext_y(self) :
+        N1 = int(0.4*self.N_sample)
+        N2 = int(0.6*self.N_sample)
+        N3 = int(0.7*self.N_sample)
+        deltaN = int(0.0025*self.N_sample) # 需要N_sample是400的倍数
         ext_yseq = [np.zeros((self.dim_obs,)) for _ in range(self.N_sample)]
         dt = self.sampleTime
-        for i in range(int(79.5/dt), int(81.5/dt)): # 需要sampleTime能被0.5整除
+        for i in range(N1-deltaN, N1+3*deltaN):
             ext_yseq[i][3:6] = np.array((10 * (1 - abs(i*dt - 80.5)), 
                                         5 * (1 - abs(i*dt - 80.5)), 
                                         20 * (1 - abs(i*dt - 80.5)) ))
-        for i in range(int(119.5/dt), int(121.5/dt)):
+        for i in range(N2-deltaN, N2+3*deltaN):
             ext_yseq[i][3:6] = np.array((0, 
                                         -7 * (1 - abs(i*dt - 120.5)), 
                                         0))
-        for i in range(int(139.5/dt), int(141.5/dt)):
+        for i in range(N3-deltaN, N3+3*deltaN):
             ext_yseq[i][3:6] = np.array((-4 * (1 - abs(i*dt - 140.5)), 
                                         -3 * (1 - abs(i*dt - 140.5)), 
                                         8 * (1 - abs(i*dt - 140.5)) ))
         return ext_yseq
-
-    def judgeQR(self, y, Q, R) :
-        dt = self.sampleTime
-        omega = y[:3]
-        A = block_diag(( 0.5*self.Omega(omega*dt), np.zeros((6,6)) ))
-        Q = Q*dt + 0.5*A@Q + 0.5*Q@A.T
-        if abs(np.linalg.norm(y[3:6]) - np.linalg.norm(self.g)) > 0.2 : 
-            R[3:6] = np.zeros((3,9))
-        # else :
-        #     Q[7:10] = np.hstack(( np.zeros((3,7)), 10*np.eye(3) ))
-        return Q, R
-
 
 
 
