@@ -109,7 +109,7 @@ class Continuous2(Model):
         self.g = g
         self.m = m
         self.n = 0 # 离散步
-        self.t = 0 # 仿真时间, t = N*sampleTime
+        self.t = 0 # 仿真时间, t = n*sampleTime
 
     def f(self, x, omega=None, omega_next=None, **args) :
         dt = self.sampleTime
@@ -376,10 +376,242 @@ class Continuous2(Model):
                                         8 * (1 - abs(i*dt - 140.5)) ))
         return ext_yseq
 
+# 四元数姿态估计，标准MHE做法
+class Continuous4(Model):
+    def __init__(self, sampleTime=0.02, N_sample=10000, g=np.array((0,0,9.805185)), m=np.array((23.4820, 0, -40.8496))) -> None:
+        super().__init__("Continuous4", 10, 9)
+        self.modelErr = False
+        self.g = g
+        self.m = m
+        self.sampleTime = sampleTime
+        self.N_sample = N_sample
+        self.t = 0 # 仿真时间
 
+    def f(self, x, yg_pre=None) :
+        if yg_pre is None: # 生成数据阶段
+            omega = self.omega(self.t)
+            x[0:4] = expm(0.5*self.Omega(omega)*self.sampleTime) @ x[0:4]
+            return x
+        F = self.F(x=x, yg_pre=yg_pre)
+        x = F @ x
+        return x
 
+    def F(self, x, yg_pre) : 
+        dt = self.sampleTime
+        Fg = -0.5*dt*(self.Omega_prime()@x[0:4]) + 0.5*0.5*dt*(np.einsum("abc,cd->abd", -self.Omega_prime(), self.Omega(yg_pre-x[4:7])) + 
+                                                               np.einsum("ab,cbd->cad", self.Omega(yg_pre-x[4:7]), -self.Omega_prime()) )@x[0:4]
+        F = np.hstack(( expm(0.5*self.Omega(yg_pre-x[4:7])*dt), Fg.T, np.zeros((4,3)) ))
+        F = np.vstack(( F, np.hstack(( np.zeros((6,4)), np.eye(6) )) ))
+        return F
 
+    def h(self, x, **args) : 
+        yg = self.omega(t=self.t) + x[4:7]
+        ya = self.quat2RotMat(q=x[0:4])@self.g + x[7:10]
+        ym = self.quat2RotMat(q=x[0:4])@self.m
+        self.t += self.sampleTime
+        return np.hstack(( yg, ya, ym ))
 
+    def H(self, x, **args) : 
+        Hg = np.zeros((3,10)) # np.hstack(( np.zeros((3,4)), np.eye(3), np.zeros((3,3)) ))
+        Ha = np.hstack(( (self.Cnb_prime(q=x[0:4])@self.g).T, np.zeros((3,3)), np.eye(3) ))
+        Hm = np.hstack(( (self.Cnb_prime(q=x[0:4])@self.m).T, np.zeros((3,6)) ))
+        return np.vstack(( Hg, Ha, Hm ))
+
+    def Omega(self, w) :
+        return np.array([
+            [0, -w[0], -w[1], -w[2]],
+            [w[0],  0,  w[2], -w[1]],
+            [w[1], -w[2],  0,  w[0]],
+            [w[2],  w[1], -w[0],  0]
+        ])
+
+    def Omega_prime(self) :
+        return np.array([
+            [
+                [0, -1, 0, 0],
+                [1, 0, 0, 0],
+                [0, 0, 0, 1],
+                [0, 0, -1, 0]
+            ],
+            [
+                [0, 0, -1, 0],
+                [0, 0, 0, -1],
+                [1, 0, 0, 0],
+                [0, 1, 0, 0]
+            ],
+            [
+                [0, 0, 0, -1],
+                [0, 0, 1, 0],
+                [0, -1, 0, 0],
+                [1, 0, 0, 0]
+            ]
+        ])
+
+    def Ksi(self, q) :
+        return np.array([
+            [-q[1], -q[2], -q[3]],
+            [q[0], -q[3], q[2]],
+            [q[3], q[0], -q[1]],
+            [-q[2], q[1], q[0]]
+        ])
+
+    def rot(self, angle, axis:str) :
+        '''angle: rad'''
+        sa = np.sin(angle)
+        ca = np.cos(angle)
+        if axis.lower() == "x" :
+            C_x = np.array([
+                [1,   0,  0],
+                [0,  ca, sa],
+                [0, -sa, ca]
+            ])
+        elif axis.lower() == 'y' :
+            C_x = np.array([
+                [ca, 0, -sa],
+                [0,  1,   0],
+                [sa, 0,  ca]
+            ])
+        elif axis.lower() == 'z' :
+            C_x = np.array([
+                [ca,  sa, 0],
+                [-sa, ca, 0],
+                [0,    0, 1]
+            ])
+        else :
+            raise ValueError("axis must be x/y/z !")
+        return C_x
+
+    def skewSymmetric(self, p:np.ndarray) :
+        if p.size == 3: # p是角速度
+            p1, p2, p3 = p
+        elif p.size == 4: # p是四元数
+            p1, p2, p3 = p[1:]
+        return np.array([
+            [ 0, -p3,  p2],
+            [ p3, 0 , -p1],
+            [-p2, p1,  0 ]
+        ])
+
+    def RotMat2quat(self, C) :
+        #region check C
+        if abs(1 - np.linalg.norm(C, ord=2)) > 1e-15 :
+            raise Warning(f"C的二范数不为1:    norm(C) = {np.linalg.norm(C, ord=2)},    norm(C) - 1 = {np.linalg.norm(C, ord=2) -1}")
+        if (abs(C) > 1).any() :
+            raise Warning("C中的某个元素绝对值大于1")
+        #endregion
+        c11, c12, c13 = C[0]
+        c21, c22, c23 = C[1]
+        c31, c32, c33 = C[2]
+        if (c33 < 0) :
+            if (c11 > c22) :
+                t = 1 + c11 - c22 - c33
+                q = np.array((t, c12 + c21, c31 + c13, c23 - c32))
+            else :
+                t = 1 - c11 + c22 - c33
+                q = np.array((c12 + c21, t, c23 + c32, c31 - c13))
+        else :
+            if (c11 < -c22) :
+                t = 1 - c11 - c22 + c33
+                q = np.array((c31 + c13, c23 + c32, t, c12 - c21))
+            else :
+                t = 1 + c11 + c22 + c33
+                q =np.array((c23 - c32, c31 - c13, c12 - c21, t))
+        # 归一化
+        q = q * 0.5 / np.sqrt(t)
+        # 确保标量项大于0
+        if (q[3] < 0) :
+            q = -q
+        # 返回值
+        q = np.array((q[3], q[0], q[1], q[2]))
+        return q
+
+    def quat2RotMat(self, q) : # Cnb(q)
+        q = q / np.linalg.norm(q) # 四元数范数归一化
+        q4, q1, q2, q3 = q
+        C = np.array([
+            [q1*q1 - q2*q2 - q3*q3 + q4*q4,   2 * (q1*q2 + q3*q4),              2 * (q1*q3 - q2*q4)],
+            [2 * (q1*q2 - q3*q4),           - q1*q1 + q2*q2 - q3*q3 + q4*q4,    2 * (q2*q3 + q1*q4)],
+            [2 * (q1*q3 + q2*q4),           2 * (q2*q3 - q1*q4),              - q1*q1 - q2*q2 + q3*q3 + q4*q4]
+        ])
+        return C
+
+    def Cnb_prime(self, q) : ## 注意确认正确性
+        q4, q1, q2, q3 = q
+        q_norm = np.linalg.norm(q)
+        C_hat = -1/q_norm**3*np.kron(np.array((q1, q2, q3, q4)).reshape(4,1,1), self.quat2RotMat(q=q))
+        C_hat += 1/q_norm*2*np.array([
+            [
+                [q1, q2, q3],
+                [q2, -q1, q4],
+                [q3, -q4, -q1]
+            ],
+            [
+                [-q2, q1, -q4],
+                [q1, q2, q3],
+                [q4, q3, -q2]
+            ],
+            [
+                [-q3, q4, q1],
+                [-q4, -q3, q2],
+                [q1, q2, q3],
+            ],
+            [
+                [q4, q3, -q2],
+                [-q3, q4, q1],
+                [q2, -q1, q4]
+            ]
+        ])
+        return C_hat
+
+    def omega(self, t, rateMode="mult_ramp") : # 生成真实角速度数据
+        N = self.N_sample
+        n = int(t / self.sampleTime)
+        if rateMode.lower() == "mult_ramp" :
+            if (0 <= n and n < 5/20 * N) :
+                w =np.array((0, 0, 0))
+            
+            elif (5/20 * N <= n and n < 7/20 * N) :
+                w =np.array(((n - 5/20 * N + 2) / N * 20, 0, 0))
+            elif (7/20 * N <= n and n < 8/20 * N) :
+                w =np.array((0, 0, 0))
+                
+            elif (8/20 * N <= n and n < 10/20 * N) :
+                w =np.array((0, (n - 8/20 * N + 2) / N * 10, 0))
+            elif (10/20 * N <= n and n < 11/20 * N) :
+                w =np.array((0, 0, 0))
+                
+            elif (11/20 * N <= n and n < 13/20 * N) :
+                w =np.array((0, 0, (n - 11/20 * N + 2) / N * 10))
+            elif (13/20 * N <= n and n < 14/20 * N) :
+                w =np.array((0, 0, 0))
+                
+            elif (14/20 * N <= n and n < 17/20 * N) :
+                w =np.array(((n - 8/20 * N + 2) / N * (10), (n - 8/20 * N + 2) / N * (-30), (n - 8/20 * N + 2) / N * (-20)))
+            
+            elif (17/20 * N <= n and n <= N) :
+                w =np.array((0, 0, 0))
+        return w
+
+    # def ext_y(self) :
+    #     N1 = int(0.4*self.N_sample)
+    #     N2 = int(0.6*self.N_sample)
+    #     N3 = int(0.7*self.N_sample)
+    #     deltaN = int(0.0025*self.N_sample) # 需要N_sample是400的倍数
+    #     ext_yseq = [np.zeros((self.dim_obs,)) for _ in range(self.N_sample)]
+    #     dt = self.sampleTime
+    #     for i in range(N1-deltaN, N1+3*deltaN):
+    #         ext_yseq[i][3:6] = np.array((10 * (1 - abs(i*dt - 80.5)), 
+    #                                     5 * (1 - abs(i*dt - 80.5)), 
+    #                                     20 * (1 - abs(i*dt - 80.5)) ))
+    #     for i in range(N2-deltaN, N2+3*deltaN):
+    #         ext_yseq[i][3:6] = np.array((0, 
+    #                                     -7 * (1 - abs(i*dt - 120.5)), 
+    #                                     0))
+    #     for i in range(N3-deltaN, N3+3*deltaN):
+    #         ext_yseq[i][3:6] = np.array((-4 * (1 - abs(i*dt - 140.5)), 
+    #                                     -3 * (1 - abs(i*dt - 140.5)), 
+    #                                     8 * (1 - abs(i*dt - 140.5)) ))
+    #     return ext_yseq
 
 
 
@@ -438,3 +670,4 @@ def getModel(modelName) :
     if modelName == "Continuous1": return Continuous1()
     if modelName == "Continuous2": return Continuous2()
     if modelName == "Continuous3": return Continuous3()
+    if modelName == "Continuous4": return Continuous4()
