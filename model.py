@@ -333,6 +333,11 @@ class Continuous2(Model):
         q4, q1, q2, q3 = q
         C_hat = 2*np.array([
             [
+                [q4, q3, -q2],
+                [-q3, q4, q1],
+                [q2, -q1, q4]
+            ],
+            [
                 [q1, q2, q3],
                 [q2, -q1, q4],
                 [q3, -q4, -q1]
@@ -346,11 +351,6 @@ class Continuous2(Model):
                 [-q3, q4, q1],
                 [-q4, -q3, q2],
                 [q1, q2, q3],
-            ],
-            [
-                [q4, q3, -q2],
-                [-q3, q4, q1],
-                [q2, -q1, q4]
             ]
         ])
         return C_hat
@@ -423,7 +423,7 @@ class Continuous4(Model):
     def H(self, x, **args) : 
         Hg = np.zeros((3,10)) # np.hstack(( np.zeros((3,4)), np.eye(3), np.zeros((3,3)) ))
         Ha = np.hstack(( (self.Cnb_prime(q=x[0:4])@self.g).T, np.eye(3), np.zeros((3,3)) ))
-        Hm = np.zeros((3,10)) # np.hstack(( (self.Cnb_prime(q=x[0:4])@self.m).T, np.zeros((3,3)), np.eye(3) ))
+        Hm = np.hstack(( (self.Cnb_prime(q=x[0:4])@self.m).T, np.zeros((3,3)), np.eye(3) ))
         return np.vstack(( Hg, Ha, Hm ))
 
     def Omega(self, w) :
@@ -510,6 +510,11 @@ class Continuous4(Model):
         # C_hat += 2/q_norm*np.array([
         C_hat = 2*np.array([
             [
+                [q4, q3, -q2],
+                [-q3, q4, q1],
+                [q2, -q1, q4]
+            ],
+            [
                 [q1, q2, q3],
                 [q2, -q1, q4],
                 [q3, -q4, -q1]
@@ -523,11 +528,6 @@ class Continuous4(Model):
                 [-q3, q4, q1],
                 [-q4, -q3, q2],
                 [q1, q2, q3],
-            ],
-            [
-                [q4, q3, -q2],
-                [-q3, q4, q1],
-                [q2, -q1, q4]
             ]
         ])
         return C_hat
