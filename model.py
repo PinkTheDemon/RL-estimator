@@ -134,9 +134,9 @@ class Continuous2(Model):
             - 1/48 * np.linalg.norm(omega)**2 * self.Omega(omega) * dt**3) @ q
         # 微分方程解
         # self.q = expm(0.5*self.Omega(omega_pre)*dt) @ self.q
-        # 变号以及归一化
-        if q[0] < 0:
-            q = -q
+        # 变号以及归一化，变号可以不要了
+        # if q[0] < 0:
+        #     q = -q
         q = q / np.linalg.norm(q)
         if not ret :
             self.q = q
@@ -145,7 +145,7 @@ class Continuous2(Model):
 
     def F(self, x, omega, **args) : 
         dt = self.sampleTime
-        A = np.hstack(( -self.skewSymmetric(omega), -0.5*np.eye(3), np.zeros((3,3)) ))
+        A = np.hstack(( -0*self.skewSymmetric(omega), -0.5*np.eye(3), np.zeros((3,3)) ))
         A = np.vstack(( A, np.zeros((6,9)) ))
         # 微分方程解
         # F = expm(A*dt)
@@ -355,6 +355,9 @@ class Continuous2(Model):
         ])
         return C_hat
 
+    def otimes(self, q1, q2) :
+        return (q2[0]*np.eye(4) + self.Omega(w=q2[1:4]))@q1
+
     def ext_y(self) :
         N1 = int(0.4*self.N_sample)
         N2 = int(0.6*self.N_sample)
@@ -383,38 +386,44 @@ class Continuous4(Model):
         self.modelErr = False
         self.g = g
         self.m = m
+        self.bg = np.zeros((3,)) # np.array((-0.019, 0.013, -0.006))
         self.sampleTime = sampleTime
         self.N_sample = N_sample
         self.t = 0 # 仿真时间
 
-    def f(self, x, yg_pre=None) :
-        if yg_pre is None: # 生成数据阶段
+    def f(self, x, omega_pre=None) :
+        if omega_pre is None: # 生成数据阶段
             omega = self.omega(self.t)
-            x[0:4] = expm(0.5*self.Omega(omega)*self.sampleTime) @ x[0:4]
+            F = block_diag(( expm(0.5*self.Omega(omega)*self.sampleTime), np.eye(6) ))
+            x = F @ x
+            x[0:4] /= np.linalg.norm(x[0:4])
+            # if x[0] < 0: 
+            #     x[0:4] = -x[0:4]
             return x
-        F = self.F(x=x, yg_pre=yg_pre)
+        F = self.F(x=x, omega_pre=omega_pre)
         x = F @ x
+        x[0:4] /= np.linalg.norm(x[0:4])
+        # if x[0] < 0: 
+        #     x[0:4] = -x[0:4]
         return x
 
-    def F(self, x, yg_pre) : 
+    def F(self, x, omega_pre) : 
         dt = self.sampleTime
-        Fg = -0.5*dt*(self.Omega_prime()@x[0:4]) + 0.5*0.5*dt*(np.einsum("abc,cd->abd", -self.Omega_prime(), self.Omega(yg_pre-x[4:7])) + 
-                                                               np.einsum("ab,cbd->cad", self.Omega(yg_pre-x[4:7]), -self.Omega_prime()) )@x[0:4]
-        F = np.hstack(( expm(0.5*self.Omega(yg_pre-x[4:7])*dt), Fg.T, np.zeros((4,3)) ))
+        F = np.hstack(( expm(0.5*self.Omega(omega_pre)*dt), np.zeros((4,6)) ))
         F = np.vstack(( F, np.hstack(( np.zeros((6,4)), np.eye(6) )) ))
         return F
 
     def h(self, x, **args) : 
-        yg = self.omega(t=self.t) + x[4:7]
-        ya = self.quat2RotMat(q=x[0:4])@self.g + x[7:10]
-        ym = self.quat2RotMat(q=x[0:4])@self.m
+        yg = self.omega(t=self.t)
+        ya = self.quat2RotMat(q=x[0:4])@self.g + x[4:7]
+        ym = self.quat2RotMat(q=x[0:4])@self.m + x[7:10]
         self.t += self.sampleTime
         return np.hstack(( yg, ya, ym ))
 
     def H(self, x, **args) : 
         Hg = np.zeros((3,10)) # np.hstack(( np.zeros((3,4)), np.eye(3), np.zeros((3,3)) ))
-        Ha = np.hstack(( (self.Cnb_prime(q=x[0:4])@self.g).T, np.zeros((3,3)), np.eye(3) ))
-        Hm = np.hstack(( (self.Cnb_prime(q=x[0:4])@self.m).T, np.zeros((3,6)) ))
+        Ha = np.hstack(( (self.Cnb_prime(q=x[0:4])@self.g).T, np.eye(3), np.zeros((3,3)) ))
+        Hm = np.zeros((3,10)) # np.hstack(( (self.Cnb_prime(q=x[0:4])@self.m).T, np.zeros((3,3)), np.eye(3) ))
         return np.vstack(( Hg, Ha, Hm ))
 
     def Omega(self, w) :
@@ -423,36 +432,6 @@ class Continuous4(Model):
             [w[0],  0,  w[2], -w[1]],
             [w[1], -w[2],  0,  w[0]],
             [w[2],  w[1], -w[0],  0]
-        ])
-
-    def Omega_prime(self) :
-        return np.array([
-            [
-                [0, -1, 0, 0],
-                [1, 0, 0, 0],
-                [0, 0, 0, 1],
-                [0, 0, -1, 0]
-            ],
-            [
-                [0, 0, -1, 0],
-                [0, 0, 0, -1],
-                [1, 0, 0, 0],
-                [0, 1, 0, 0]
-            ],
-            [
-                [0, 0, 0, -1],
-                [0, 0, 1, 0],
-                [0, -1, 0, 0],
-                [1, 0, 0, 0]
-            ]
-        ])
-
-    def Ksi(self, q) :
-        return np.array([
-            [-q[1], -q[2], -q[3]],
-            [q[0], -q[3], q[2]],
-            [q[3], q[0], -q[1]],
-            [-q[2], q[1], q[0]]
         ])
 
     def rot(self, angle, axis:str) :
@@ -480,17 +459,6 @@ class Continuous4(Model):
         else :
             raise ValueError("axis must be x/y/z !")
         return C_x
-
-    def skewSymmetric(self, p:np.ndarray) :
-        if p.size == 3: # p是角速度
-            p1, p2, p3 = p
-        elif p.size == 4: # p是四元数
-            p1, p2, p3 = p[1:]
-        return np.array([
-            [ 0, -p3,  p2],
-            [ p3, 0 , -p1],
-            [-p2, p1,  0 ]
-        ])
 
     def RotMat2quat(self, C) :
         #region check C
@@ -526,7 +494,7 @@ class Continuous4(Model):
         return q
 
     def quat2RotMat(self, q) : # Cnb(q)
-        q = q / np.linalg.norm(q) # 四元数范数归一化
+        # q = q / np.linalg.norm(q) # 四元数范数归一化
         q4, q1, q2, q3 = q
         C = np.array([
             [q1*q1 - q2*q2 - q3*q3 + q4*q4,   2 * (q1*q2 + q3*q4),              2 * (q1*q3 - q2*q4)],
@@ -537,9 +505,10 @@ class Continuous4(Model):
 
     def Cnb_prime(self, q) : ## 注意确认正确性
         q4, q1, q2, q3 = q
-        q_norm = np.linalg.norm(q)
-        C_hat = -1/q_norm**3*np.kron(np.array((q1, q2, q3, q4)).reshape(4,1,1), self.quat2RotMat(q=q))
-        C_hat += 1/q_norm*2*np.array([
+        # q_norm = np.linalg.norm(q)
+        # C_hat = -1/q_norm**3*np.kron(np.array((q1, q2, q3, q4)).reshape(4,1,1), self.quat2RotMat(q=q))
+        # C_hat += 2/q_norm*np.array([
+        C_hat = 2*np.array([
             [
                 [q1, q2, q3],
                 [q2, -q1, q4],
