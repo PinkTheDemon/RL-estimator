@@ -59,6 +59,7 @@ def generate_trajectories(modelName, steps, episodes, randSeed, isSave=True):
     model = getModel(modelName=modelName)
     modelParam = getModelParams(modelName=modelName)
     for num in range(episodes):
+        if hasattr(model, "t") : model.t = 0
         x_seq, y_seq = generate_data(model=model, modelParam=modelParam, steps=steps, randSeed=randSeed+num)
         trajs["x_batch"].append(x_seq)
         trajs["y_batch"].append(y_seq)
