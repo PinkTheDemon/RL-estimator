@@ -24,12 +24,15 @@ class Model:
         if disturb is not None : x_next += disturb
         y_next = h(x=x_next)
         if noise is not None : y_next += noise
+        self.timeStep()
         return x_next, y_next
 
     #region 虚函数，子类具体实现，子类没有的话可以直接raise error
     def f(self):
         pass
     def h(self):
+        pass
+    def timeStep(self):
         pass
     def F(self):
         pass
@@ -417,8 +420,10 @@ class Continuous4(Model):
         yg = self.omega(t=self.t)
         ya = self.quat2RotMat(q=x[0:4])@self.g + x[4:7]
         ym = self.quat2RotMat(q=x[0:4])@self.m + x[7:10]
-        self.t += self.sampleTime
         return np.hstack(( yg, ya, ym ))
+
+    def timeStep(self) : # 仅在数据生成时使用，估计时无需使用
+        self.t += self.sampleTime
 
     def H(self, x, **args) : 
         Hg = np.zeros((3,10)) # np.hstack(( np.zeros((3,4)), np.eye(3), np.zeros((3,3)) ))

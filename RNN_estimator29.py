@@ -162,7 +162,7 @@ class RL_estimator(est.Estimator):
         self.gamma = gamma
         self.policy = ActorRNN(dim_input=dim_input, dim_output=dim_output, **nnParams).to(self.device)
         self.optimizer = Adam(self.policy.parameters(), lr=lr)
-        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=50, factor=0.5, min_lr=lr_min, verbose=True)
+        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=50, factor=0.75, min_lr=lr_min, verbose=True)
         super().__init__(name="RL_estimator", x0_hat=x0_hat, P0_hat=P0_hat)
     # end function __init__
     def reset(self, x0_hat, P0_hat) -> None:
@@ -357,15 +357,15 @@ def main():
     #region 修改参数以便人工测试（自动测试时注释掉，否则参数无法自动变化）
     # trainParams["lr"] = 5e-4
     # trainParams["lr_min"] = 1e-6
-    # trainParams["gamma"] = 0.8
-    # args.hidden_layer = ([64], 64, [64]) # 这几个要同步修改
-    # nnParams["dim_fc1"] = [64] # 这几个要同步修改
+    # trainParams["gamma"] = 1.0
+    # args.hidden_layer = ([], 64, [128]) # 这几个要同步修改
+    # nnParams["dim_fc1"] = [] # 这几个要同步修改
     # nnParams["dim_rnn_hidden"] = 64 # 这几个要同步修改
-    # nnParams["dim_fc2"] = [64] # 这几个要同步修改
-    # nnParams["dropout"] = 0.0
-    # nnParams["num_rnn_layers"] = 2
-    # nnParams["type_activate"] = "relu"
-    # nnParams["type_rnn"] = "gru"
+    # nnParams["dim_fc2"] = [128] # 这几个要同步修改
+    # nnParams["dropout"] = 0.1
+    # nnParams["num_rnn_layers"] = 3
+    # nnParams["type_activate"] = "elu"
+    # nnParams["type_rnn"] = "lstm"
     #endregion
     # 定义估计器类以及获取测试数据
     agent = RL_estimator(model=model, lr=trainParams["lr"], lr_min=trainParams["lr_min"], nnParams=nnParams, 

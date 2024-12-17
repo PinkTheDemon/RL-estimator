@@ -2,15 +2,28 @@
 
 # 定义参数列表
 cov_list=(
-    # "1e-1"
+    # "1e-2"
     "1e0"
-    # "1e1"
+    # "1e2"
 )
 gamma_list=(
-    # 1.0
-    # 0.99
-    # 0.9
-    0.8
+    # best ##########
+    # 0.8（修改之前）(rnn25)
+    # 1.0 (after) (rnn34)300集训练后加载网络再练300集，学习率依然是最小的学习率(38)
+    # 1.0 # lr衰减因子0.5->0.75(39)
+    # 1.0 # lr衰减因子0.5->0.75，继续训练但cov减小(41)
+    # try ###########
+    1.0
+    # used #########
+    # 0.99 (after)
+    # 0.9 (after)
+    # 0.8 (after)
+    # 0.7 (after)
+    # 0.6 (after)
+    # 1.0 (before)
+    # 0.99 (before)
+    # 0.9 (before)
+    # 0.8 (before)
 )
 hidden_list=(
     # 目前最优
@@ -39,12 +52,17 @@ numLayer_list=(
     3
 )
 actFun_list=(
+    # best#########
+    # "elu" #1
+    # try##########
+    "elu" #1.0
+    # used#########
+    # "elu" #1.2
+    # "prelu"
     # "relu"
-    "leaky_relu"
-    "prelu"
-    "elu"
-    "tanh"
-    "sigmoid"
+    # "leaky_relu" #0.01,0.05
+    # "tanh"
+    # "sigmoid"
 )
 
 # 循环执行Python脚本
@@ -60,7 +78,7 @@ do
                 do
                     for actFun in "${actFun_list[@]}"
                     do
-                        python ./RNN_estimator29.py --cov "$cov" --gamma $gamma --hidden_layer "$hidden" --dropout $dropout --num_layer $numLayer --act_fun "$actFun"
+                        python ./RNN_estimator29_copy3.py --cov "$cov" --gamma $gamma --hidden_layer "$hidden" --dropout $dropout --num_layer $numLayer --act_fun "$actFun"
                     done
                 done
             done
