@@ -47,25 +47,27 @@ def simulate(agent:est.Estimator, estParams, x_batch, y_batch, isPrint=False, is
         agent.reset(x0_hat=estParams["x0_hat"], P0_hat=estParams["P0_hat"])
     #endregion 状态估计
     # 计算性能指标
-    MSE_x, RMSE_x = fc.calMSE(x_batch=[x_seq[:] for x_seq in x_batch], xhat_batch=[x_seq[:] for x_seq in xhat_batch])
-    MSE_y, RMSE_y = fc.calMSE(x_batch=y_batch, xhat_batch=yhat_batch)
+    MSE_x, RMSE_x = fc.calMSE(x_batch=[x_seq[1:] for x_seq in x_batch], xhat_batch=[x_seq[1:] for x_seq in xhat_batch])
+    # MSE_y, RMSE_y = fc.calMSE(x_batch=y_batch, xhat_batch=yhat_batch)
     # 打印
     if isPrint:
         print(f"state MSE of {agent.name}: {MSE_x}, RMSE: {RMSE_x}")
-        print(f"observation MSE of {agent.name}: {MSE_y}, RMSE: {RMSE_y}")
+        # print(f"observation MSE of {agent.name}: {MSE_y}, RMSE: {RMSE_y}")
         print(f"average cpu time of {agent.name}: {execution_time} ms")
     else :
         return xhat_batch, Phat_batch
     # 绘图
     if isPlot:
-        plotTrajectory(x_seq=x_batch[-1], x_hat_seq=xhat_seq, STATUS=agent.name)
+        plotTrajectory(x_seq=x_batch[-1][1:], x_hat_seq=xhat_seq[1:], STATUS=agent.name)
         plt.show()
 
 if __name__ == "__main__" : 
     # 选择模型、仿真步数以及轨迹条数
-    model = getModel(modelName="Continuous1")
-    steps = 100
-    episodes = 50
+    model = getModel(modelName="Continuous4")
+    # model.sampleTime=0.01
+    # model.N_sample=20000 # 要想改生成的数据，必须去模型定义那里改
+    steps = 5000
+    episodes = 10
     randSeed = 10086
     modelErr = False
     isPrint = True
@@ -96,14 +98,24 @@ if __name__ == "__main__" :
                 print("window length:", estParams["window"])
                 logfile.flush()
                 # 生成EKF-MHE类
-                f, h, F, H = getSysFuns(model=model, modelErr=estParams["modelErr"])
-                agent = est.MHE(f_fn=f, h_fn=h, F_fn=F, H_fn=H, window=estParams["window"])
+                if model.name == "Continuous2" :
+                    agent = est.MHEForQuat(model=model, window=estParams["window"])
+                elif model.name == "Continuous4" :
+                    agent = est.MHEForC4(model=model, window=estParams["window"])
+                else :
+                    f, h, F, H = getSysFuns(model=model, modelErr=estParams["modelErr"])
+                    agent = est.MHE(f_fn=f, h_fn=h, F_fn=F, H_fn=H, window=estParams["window"])
                 simulate(agent=agent, estParams=estParams, x_batch=x_batch, y_batch=y_batch, isPrint=isPrint, isPlot=isPlot)
                 print("********************")
         elif status.upper() == "EKF":
             # 生成EKF类
-            f, h, F, H = getSysFuns(model=model, modelErr=estParams["modelErr"])
-            agent = est.EKF(f_fn=f, h_fn=h, F_fn=F, H_fn=H)
+            if model.name == "Continuous2" :
+                agent = est.EKFForQuat(model=model)
+            elif model.name == "Continuous4" :
+                agent = est.EKFForC4(model=model)
+            else :
+                f, h, F, H = getSysFuns(model=model, modelErr=estParams["modelErr"])
+                agent = est.EKF(f_fn=f, h_fn=h, F_fn=F, H_fn=H)
             simulate(agent=agent, estParams=estParams, x_batch=x_batch, y_batch=y_batch, isPrint=isPrint, isPlot=isPlot)
             print("********************")
     logfile.endLog()
