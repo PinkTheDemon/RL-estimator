@@ -2,8 +2,10 @@
 
 # 定义参数列表
 cov_list=(
-    # "1e-2"
-    "1e0"
+    # "1e-6"
+    # "1e-4"
+    "1e-2"
+    # "1e0"
     # "1e2"
 )
 gamma_list=(
@@ -27,10 +29,15 @@ gamma_list=(
 )
 hidden_list=(
     # 目前最优
-    "([], 64, [128])" # quad
+    # "([], 64, [128])" # quad
     # "([], 128, [])" # SOS
     # 尝试
+    "([], 128, [])" # C4
     # 尝试过
+    # "([], 128, [128])" # C4
+    # "([], 64, [64])" #C4
+    # "([], 128, [128,128])" #C4
+    # "([], 128, [128,128,128])" #C4
     # "([], 128, [128])" # SOS
     # "([128], 128, [])" # SOS
     # "([128], 128, [128])" # SOS
@@ -41,25 +48,28 @@ hidden_list=(
 )
 dropout_list=(
     # 0
-    0.1
-    # 0.2
+    # 0.1
+    0.2
     # 0.3
-    # 0.4
+    0.4
 )
 numLayer_list=(
     # 1
-    # 2
+    6
+    5
+    4
     3
+    2
 )
 actFun_list=(
     # best#########
     # "elu" #1
     # try##########
-    "elu" #1.0
+    # "elu" #1.0
     # used#########
     # "elu" #1.2
     # "prelu"
-    # "relu"
+    "relu"
     # "leaky_relu" #0.01,0.05
     # "tanh"
     # "sigmoid"
@@ -78,7 +88,7 @@ do
                 do
                     for actFun in "${actFun_list[@]}"
                     do
-                        python ./RNN_estimator29_copy3.py --cov "$cov" --gamma $gamma --hidden_layer "$hidden" --dropout $dropout --num_layer $numLayer --act_fun "$actFun"
+                        python ./RNN_estimator_C4.py --cov "$cov" --gamma $gamma --hidden_layer "$hidden" --dropout $dropout --num_layer $numLayer --act_fun "$actFun"
                     done
                 done
             done

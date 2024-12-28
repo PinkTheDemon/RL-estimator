@@ -240,7 +240,7 @@ def EVD(M:np.ndarray, rank=None):
 def calMSE(x_batch, xhat_batch):
     x_batch = np.array(x_batch)
     xhat_batch = np.array(xhat_batch)
-    SE = np.square(x_batch - xhat_batch)
+    SE = np.square(x_batch[:, :, :4] - xhat_batch[:, :, :4])
     MSE = np.mean(np.mean(SE, axis=0), axis=0)
     RMSE = np.sqrt(np.mean(MSE))
     return MSE, RMSE

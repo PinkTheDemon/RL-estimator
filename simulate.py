@@ -46,11 +46,11 @@ def simulate(agent:est.Estimator, estParams, x_batch, y_batch, isPrint=False, is
         Phat_batch.append(Phat_seq)
         agent.reset(x0_hat=estParams["x0_hat"], P0_hat=estParams["P0_hat"])
     #endregion 状态估计
-    # 计算性能指标
-    MSE_x, RMSE_x = fc.calMSE(x_batch=[x_seq[1:] for x_seq in x_batch], xhat_batch=[x_seq[1:] for x_seq in xhat_batch])
-    # MSE_y, RMSE_y = fc.calMSE(x_batch=y_batch, xhat_batch=yhat_batch)
     # 打印
     if isPrint:
+        # 计算性能指标
+        MSE_x, RMSE_x = fc.calMSE(x_batch=[x_seq[1:] for x_seq in x_batch], xhat_batch=[x_seq[1:] for x_seq in xhat_batch])
+        # MSE_y, RMSE_y = fc.calMSE(x_batch=y_batch, xhat_batch=yhat_batch)
         print(f"state MSE of {agent.name}: {MSE_x}, RMSE: {RMSE_x}")
         # print(f"observation MSE of {agent.name}: {MSE_y}, RMSE: {RMSE_y}")
         print(f"average cpu time of {agent.name}: {execution_time} ms")

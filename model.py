@@ -102,7 +102,7 @@ class Continuous1(Model):
 
 # 四元数姿态估计
 class Continuous2(Model):
-    def __init__(self, sampleTime=0.02, N_sample=10000, q0=np.array([0.94563839, -0.03449911,  0.21051564,  0.24548119]), 
+    def __init__(self, sampleTime=0.02, N_sample=5000, q0=np.array([0.94563839, -0.03449911,  0.21051564,  0.24548119]), 
                  g=np.array((0,0,9.805185)), m=np.array((23.4820, 0, -40.8496))) -> None:
         super().__init__("Continuous2", 9, 9)
         self.modelErr = False
@@ -384,7 +384,7 @@ class Continuous2(Model):
 
 # 四元数姿态估计，标准MHE做法
 class Continuous4(Model):
-    def __init__(self, sampleTime=0.02, N_sample=10000, g=np.array((0,0,9.805185)), m=np.array((23.4820, 0, -40.8496))) -> None:
+    def __init__(self, sampleTime=0.02, N_sample=5000, g=np.array((0,0,9.805185)), m=np.array((23.4820, 0, -40.8496))) -> None:
         super().__init__("Continuous4", 10, 9)
         self.modelErr = False
         self.g = g
@@ -396,13 +396,7 @@ class Continuous4(Model):
 
     def f(self, x, omega_pre=None) :
         if omega_pre is None: # 生成数据阶段
-            omega = self.omega(self.t)
-            F = block_diag(( expm(0.5*self.Omega(omega)*self.sampleTime), np.eye(6) ))
-            x = F @ x
-            x[0:4] /= np.linalg.norm(x[0:4])
-            # if x[0] < 0: 
-            #     x[0:4] = -x[0:4]
-            return x
+            omega_pre = self.omega(self.t)
         F = self.F(x=x, omega_pre=omega_pre)
         x = F @ x
         x[0:4] /= np.linalg.norm(x[0:4])
@@ -412,24 +406,23 @@ class Continuous4(Model):
 
     def F(self, x, omega_pre) : 
         dt = self.sampleTime
-        F = np.hstack(( expm(0.5*self.Omega(omega_pre)*dt), np.zeros((4,6)) ))
-        F = np.vstack(( F, np.hstack(( np.zeros((6,4)), np.eye(6) )) ))
-        return F
+        F = expm(0.5*self.Omega(omega_pre)*dt)
+        return block_diag(( F, np.eye(6) ))
 
     def h(self, x, **args) : 
         yg = self.omega(t=self.t)
         ya = self.quat2RotMat(q=x[0:4])@self.g + x[4:7]
         ym = self.quat2RotMat(q=x[0:4])@self.m + x[7:10]
-        return np.hstack(( yg, ya, ym ))
+        return np.hstack(( yg, ya, ym ))#
 
     def timeStep(self) : # 仅在数据生成时使用，估计时无需使用
         self.t += self.sampleTime
 
     def H(self, x, **args) : 
         Hg = np.zeros((3,10)) # np.hstack(( np.zeros((3,4)), np.eye(3), np.zeros((3,3)) ))
-        Ha = np.hstack(( (self.Cnb_prime(q=x[0:4])@self.g).T, np.eye(3), np.zeros((3,3)) ))
+        Ha = np.hstack(( (self.Cnb_prime(q=x[0:4])@self.g).T, np.eye(3), np.zeros((3,3)) ))#
         Hm = np.hstack(( (self.Cnb_prime(q=x[0:4])@self.m).T, np.zeros((3,3)), np.eye(3) ))
-        return np.vstack(( Hg, Ha, Hm ))
+        return np.vstack(( Hg, Ha, Hm ))#
 
     def Omega(self, w) :
         return np.array([

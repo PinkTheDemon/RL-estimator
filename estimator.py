@@ -316,7 +316,7 @@ class MHEForC4(Estimator) :
         # 定义W0
         ds = self.model.dim_state
         #region 数据处理
-        if np.linalg.norm(self.x_hat) == 0 : # y0用来计算四元数q的初始估计
+        if len(self.y_seq) == 0 : # y0用来计算四元数q的初始估计
             y_a = y[3:6]
             y_m = y[6:9]
             roll_accmag_0 = np.arctan2(y_a[1], y_a[2])
@@ -324,7 +324,6 @@ class MHEForC4(Estimator) :
             C_n_b__0 = self.model.rot(angle=0, axis="z") @ self.model.rot(angle=pitch_accmag_0, axis="Y") @ self.model.rot(angle=roll_accmag_0, axis="X")
             y_m_0_NEW = C_n_b__0.T @ y_m.reshape(-1,1)
             yaw_accmag_0 = -np.arctan2(y_m_0_NEW[1], y_m_0_NEW[0]).item()
-            # q_m: Estimated-from-measurements quaternion (i.e., q from y_g (measured gyro output))
             q = self.model.RotMat2quat(self.model.rot(angle=yaw_accmag_0, axis="Z") @
                                        self.model.rot(angle=pitch_accmag_0, axis="Y") @
                                        self.model.rot(angle=roll_accmag_0, axis="X"))
@@ -364,7 +363,7 @@ def NLSFForC4(model:Continuous4, x0_bar, y_seq, P_inv, Q, R, x0=None, gamma=1.0,
     # 参数打包
     params = (model, x0_bar, y_seq, P_inv, Q, R, gamma, xend)
     # 计算最小二乘问题
-    result = least_squares(fun=resForC4, x0=x0, args=params, method='lm', jac=jacForC4, max_nfev=5) #
+    result = least_squares(fun=resForC4, x0=x0, args=params, method='lm', jac=jacForC4, max_nfev=10) #
     return result
 
 def resForC4(x, model:Continuous4, x0_bar, y_seq, P_inv, Q, R, gamma=1.0, xend=None):
@@ -375,8 +374,8 @@ def resForC4(x, model:Continuous4, x0_bar, y_seq, P_inv, Q, R, gamma=1.0, xend=N
     M = np.copy(P_inv)
     for i in range(num_y-1) :
         f = np.hstack(( f, (x[ds*(i+1):ds*(i+2)] - model.f(x=x[ds*(i):ds*(i+1)], omega_pre=y_seq[i][0:3]))[np.newaxis,:], 
-                           (y_seq[i+1][3:9] - model.h(x=x[ds*(i+1):ds*(i+2)])[3:9])[np.newaxis,:] ))
-        M = block_diag(( M*gamma, inv(Q), inv(R[3:9,3:9]) ))
+                           (y_seq[i+1][3:] - model.h(x=x[ds*(i+1):ds*(i+2)])[3:])[np.newaxis,:] ))
+        M = block_diag(( M*gamma, inv(Q), inv(R[3:,3:]) ))
 
     if xend is not None:
         f = np.hstack(( f, (xend-model.f(x=x[-ds:], omega_pre=y_seq[-1][0:3]))[np.newaxis,:] ))
@@ -396,7 +395,7 @@ def jacForC4(x, model:Continuous4, x0_bar, y_seq, P_inv, Q, R, gamma=1.0, xend=N
         J = np.pad(J, ((0,0),(0,ds)))
         Jadd = np.pad(jadd(x0=x[ds*i:ds*(i+1)], y0=y_seq[i], x1=x[ds*(i+1):ds*(i+2)]), ((0,0),(i*ds,0)))
         J = np.vstack(( J, Jadd ))
-        M = block_diag(( M*gamma, inv(Q), inv(R[3:9,3:9]) ))
+        M = block_diag(( M*gamma, inv(Q), inv(R[3:,3:]) ))
 
     if xend is not None :
         Jadd = np.pad(-model.F(x=xend, omega_pre=y_seq[-1][0:3]), ((0,0),(ds*(num_y-1),0)))
