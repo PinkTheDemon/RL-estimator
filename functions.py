@@ -32,18 +32,18 @@ def block_diag(matrix_list) :
 
 
 # inverse of lower triangular matrix M
-def inv(M:np.ndarray) : 
+def inv(M:np.ndarray, threshold_ratio=1e-12) : 
     if M.shape == (1,1) : 
         M_inv = 0 if M.item() == 0 else 1/M
-    elif np.linalg.matrix_rank(M) < M.shape[0]: # 不满秩方阵
+    else : # 通过SVD分解，可处理不满秩方阵
+        # 计算svd分解
         U, S, V = np.linalg.svd(M)
-        S = np.diag([1/s if s != 0 else 0 for s in S])
-        S = np.pad(S, ((0,0), (0,U.shape[0]-V.shape[0])))
+        # 确定截断阈值（基于最大奇异值的比例）
+        max_s = np.max(S)
+        threshold = max_s * threshold_ratio
+        # 处理奇异值倒数，截断小奇异值
+        S = np.diag([1/s if s > threshold else 0 for s in S])
         M_inv = V.T @ S @ U.T
-    else :
-        L = np.linalg.cholesky(M)
-        L_inv = np.linalg.inv(L)
-        M_inv = L_inv.transpose(*range(L_inv.ndim - 2), -1, -2) @ L_inv
     return M_inv
 
 
