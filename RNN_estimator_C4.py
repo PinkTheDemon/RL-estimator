@@ -159,7 +159,7 @@ class RL_estimator(est.Estimator):
         dim_output = fun.ds2do(model.dim_state)
         self.device = device
         self.gamma = gamma
-        self.policy = ActorRNN(dim_input=dim_input, dim_output=dim_output, **nnParams).to(self.device)
+        self.policy = ActorRNN(dim_input=dim_input, dim_output=dim_output, device=self.device, **nnParams)
         self.optimizer = Adam(self.policy.parameters(), lr=lr)
         self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=50, factor=0.75, min_lr=lr_min, verbose=True)
         super().__init__(name="RL_estimator", x0_hat=x0_hat, P0_hat=P0_hat)
