@@ -316,22 +316,22 @@ class MHEForC4(Estimator) :
         # 定义W0
         ds = self.model.dim_state
         #region 数据处理
-        if len(self.y_seq) == 0 : # y0用来计算四元数q的初始估计
-            y_a = y[3:6]
-            y_m = y[6:9]
-            roll_accmag_0 = np.arctan2(y_a[1], y_a[2])
-            pitch_accmag_0 = -np.arctan2(y_a[0], np.sqrt(y_a[1]**2 + y_a[2]**2))
-            C_n_b__0 = self.model.rot(angle=0, axis="z") @ self.model.rot(angle=pitch_accmag_0, axis="Y") @ self.model.rot(angle=roll_accmag_0, axis="X")
-            y_m_0_NEW = C_n_b__0.T @ y_m.reshape(-1,1)
-            yaw_accmag_0 = -np.arctan2(y_m_0_NEW[1], y_m_0_NEW[0]).item()
-            q = self.model.RotMat2quat(self.model.rot(angle=yaw_accmag_0, axis="Z") @
-                                       self.model.rot(angle=pitch_accmag_0, axis="Y") @
-                                       self.model.rot(angle=roll_accmag_0, axis="X"))
-            self.y_hat = y
-            self.y_seq.append(y)
-            self.x_hat = np.hstack(( q, np.zeros((6,))))
-            self.x0_bar_seq[0] = self.x_hat
-            return 
+        # if len(self.y_seq) == 0 : # y0用来计算四元数q的初始估计
+        #     y_a = y[3:6]
+        #     y_m = y[6:9]
+        #     roll_accmag_0 = np.arctan2(y_a[1], y_a[2])
+        #     pitch_accmag_0 = -np.arctan2(y_a[0], np.sqrt(y_a[1]**2 + y_a[2]**2))
+        #     C_n_b__0 = self.model.rot(angle=0, axis="z") @ self.model.rot(angle=pitch_accmag_0, axis="Y") @ self.model.rot(angle=roll_accmag_0, axis="X")
+        #     y_m_0_NEW = C_n_b__0.T @ y_m.reshape(-1,1)
+        #     yaw_accmag_0 = -np.arctan2(y_m_0_NEW[1], y_m_0_NEW[0]).item()
+        #     q = self.model.RotMat2quat(self.model.rot(angle=yaw_accmag_0, axis="Z") @
+        #                                self.model.rot(angle=pitch_accmag_0, axis="Y") @
+        #                                self.model.rot(angle=roll_accmag_0, axis="X"))
+        #     self.y_hat = y
+        #     self.y_seq.append(y)
+        #     self.x_hat = q#np.hstack(( q, np.zeros((6,))))
+        #     self.x0_bar_seq[0] = self.x_hat
+        #     return 
         # 保存y到y_seq
         self.y_seq.append(y)
         if len(self.y_seq) > self.window+1 : del self.y_seq[0]
@@ -708,6 +708,12 @@ class Quadratic() :
         if xend is not None : 
             f = np.hstack((f, (xend-self.f_fn(x[-ds:]))[np.newaxis,:]))
             M = block_diag((M * gamma, inv(Q)))
+
+        # 如果M有全零行，把该行以及行号相同的列剔除并且剔除f中对应的元素
+        non_zeros = ~np.all(M == 0, axis=1)
+        M = M[non_zeros]
+        M = M[:, non_zeros]
+        f = f[:, non_zeros]
         
         L = np.linalg.cholesky(M)
         return (f@L).reshape(-1)
@@ -730,60 +736,104 @@ class Quadratic() :
             J = np.vstack((J, Jadd))
             M = block_diag((M * gamma, inv(Q)))
 
+        # 如果M有全零行，把该行以及行号相同的列剔除并且剔除J中对应的行
+        non_zeros = ~np.all(M == 0, axis=1)
+        M = M[non_zeros]
+        M = M[:, non_zeros]
+        J = J[non_zeros]
+
         L = np.linalg.cholesky(M).T
         return L@J
 
 
-class Particle_Filter() : 
-    def __init__(self, state_dim:int, obs_dim:int, num_particles:int, fx, hx, x0_mu, P0, threshold=None, rand_num=1111) -> None:
-        self.state_dim = state_dim
-        self.obs_dim   = obs_dim
-        self.N         = num_particles
-        self.fx        = fx
-        self.hx        = hx
-        self.threshold = self.N * 0.5 if threshold is None else threshold
-        np.random.seed(seed=rand_num)
-        self.create_gaussian_particles(x0_mu, P0, self.N)
+from filterpy.kalman import UnscentedKalmanFilter, MerweScaledSigmaPoints
+class UKF(UnscentedKalmanFilter, Estimator):
+    def __init__(self, dim_x, dim_z, dt, hx, fx, n=3, alpha=.1, beta=2., kappa=-1, sqrt_fn=None, x_mean_fn=None, z_mean_fn=None, residual_x=None, residual_z=None, x0_hat=None, P0_hat=None):
+        points = MerweScaledSigmaPoints(n, alpha, beta, kappa)
+        UnscentedKalmanFilter.__init__(self, dim_x, dim_z, dt, hx, fx, points, sqrt_fn, x_mean_fn, z_mean_fn, residual_x, residual_z)
+        Estimator.__init__(self, name="UKF", x0_hat=x0_hat, P0_hat=P0_hat)
 
-    def create_uniform_particles(self, state_dim, state_range, N) : 
-        self.particles = np.empty((N, state_dim))
-        for i in range(state_dim) : 
-            self.particles[:, i] = np.random.uniform(state_range[i][0], state_range[i][1], size=N)
-        self.weight = np.ones((N, ))/N
+    def reset(self, x0_hat, P0_hat):
+        self.x = x0_hat
+        self.P = P0_hat
 
-    def create_gaussian_particles(self, mean, cov, N) : 
-        self.particles = np.random.multivariate_normal(mean, cov, N)
-        self.weight = np.ones((N, ))/N
+    def estimate(self, y, Q, R):
+        self.Q = Q
+        self.R = R
+        self.predict()
+        self.update(y)
+        self.x_hat = self.x
+        self.y_hat = self.hx(self.x_hat)
+        self.P_hat = self.P
+
+
+# class ParticleFilter() : 
+#     def __init__(self, state_dim:int, obs_dim:int, num_particles:int, fx, hx, threshold=None, rand_num=1111) -> None: #, x0_mu, P0
+#         self.state_dim = state_dim
+#         self.obs_dim   = obs_dim
+#         self.N         = num_particles
+#         self.fx        = fx
+#         self.hx        = hx
+#         self.threshold = self.N * 0.5 if threshold is None else threshold
+#         np.random.seed(seed=rand_num)
+#         self.name = "PF"
+#         # self.reset(x0_mu, P0)
+#         # self.create_gaussian_particles(x0_mu, P0, self.N)
+
+#     def reset(self, x0_hat, P0_hat):
+#         self.create_gaussian_particles(x0_hat, P0_hat, self.N)
+
+#     def create_uniform_particles(self, state_dim, state_range, N) : 
+#         self.particles = np.empty((N, state_dim))
+#         for i in range(state_dim) : 
+#             self.particles[:, i] = np.random.uniform(state_range[i][0], state_range[i][1], size=N)
+#         self.weight = np.ones((N, ))/N
+
+#     def create_gaussian_particles(self, mean, cov, N) : 
+#         self.particles = np.random.multivariate_normal(mean, cov, N)
+#         self.weight = np.ones((N, ))/N
     
-    def predict(self, noise_Q, noise_mu=None, dt=.1) : 
-        if noise_mu is None : noise_mu = np.zeros((self.state_dim, ))
-        process_noise = np.random.multivariate_normal(noise_mu, noise_Q, self.N)
-        self.particles = self.fx(self.particles, process_noise, dt)
+#     def predict(self, noise_Q, noise_mu=None, dt=.1) : 
+#         if noise_mu is None : noise_mu = np.zeros((self.state_dim, ))
+#         process_noise = np.random.multivariate_normal(noise_mu, noise_Q, self.N)
+#         for i in range(self.N):
+#             self.particles[i] = self.fx(self.particles[i], dt) + process_noise[i]
+#         # self.particles = self.fx(self.particles, process_noise, dt)
 
-    def update(self, observation, obs_noise_R) : 
-        for i in range(self.N) : 
-            self.weight[i] *= multivariate_normal(self.hx(self.particles[i]), obs_noise_R).pdf(observation)
+#     def update(self, observation, obs_noise_R) : 
+#         for i in range(self.N) : 
+#             # self.weight[i] *= multivariate_normal(self.hx(self.particles[i]), obs_noise_R).pdf(observation)
+#             log_weight = -0.5 * ((observation - self.hx(self.particles[i])).reshape(1,-1) @ np.linalg.inv(obs_noise_R) @ (observation - self.hx(self.particles[i])).reshape(-1,1))
+#             self.weight[i] *= np.exp(log_weight)
         
-        self.weight += 1.e-300          # avoid round-off to zero
-        self.weight /= sum(self.weight) # normalize
+#         self.weight += 1.e-300          # avoid round-off to zero
+#         self.weight /= sum(self.weight) # normalize
 
-    def estimate(self) : 
-        state_hat = np.average(self.particles, weights=self.weight, axis=0)
-        Cov_hat = np.cov(self.particles, rowvar=False, aweights=self.weight)
+#     def estimate(self, y, Q, R) : 
+#         self.predict(Q)
+#         self.update(y, R)
 
-        if self.neff() >= self.threshold : 
-            print(f'resample, Wneff={self.neff()}')
-            self.simple_resample()
-        return state_hat, Cov_hat
+#         state_hat = np.average(self.particles, weights=self.weight, axis=0)
+#         Cov_hat = np.cov(self.particles, rowvar=False, aweights=self.weight)
+#         Cov_hat = np.clip(Cov_hat, a_min=-1e5, a_max=1e5)  # 限制协方差的范围
+
+#         if self.neff() <= self.threshold : 
+#             print(f'resample, Wneff={self.neff()}')
+#             self.simple_resample()
+        
+#         self.x_hat = state_hat
+#         self.y_hat = self.hx(state_hat)
+#         self.P_hat = Cov_hat
+#         # return state_hat, Cov_hat
     
-    def simple_resample(self) : 
-        cumulative_sum = np.cumsum(self.weight)
-        cumulative_sum[-1] = 1.  # avoid round-off error
-        indexes = np.searchsorted(cumulative_sum, np.random.rand(self.N))
+#     def simple_resample(self) : 
+#         cumulative_sum = np.cumsum(self.weight)
+#         cumulative_sum[-1] = 1.  # avoid round-off error
+#         indexes = np.searchsorted(cumulative_sum, np.random.rand(self.N))
 
-        # resample according to indexes
-        self.particles = self.particles[indexes]
-        self.weight = np.ones((self.N, ))/self.N
+#         # resample according to indexes
+#         self.particles = self.particles[indexes]
+#         self.weight = np.ones((self.N, ))/self.N
 
-    def neff(self) : 
-        return 1. / np.sum(np.square(self.weight))
+#     def neff(self) : 
+#         return 1. / np.sum(np.square(self.weight))

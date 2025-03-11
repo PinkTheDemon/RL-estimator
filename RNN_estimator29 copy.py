@@ -36,9 +36,15 @@ class ActorRNN(nn.Module):
             if type_activate.lower() == 'relu' : 
                 self.fc1.append(nn.ReLU())
             elif type_activate.lower() == 'leaky_relu' : 
-                self.fc1.append(nn.LeakyReLU())
+                self.fc1.append(nn.LeakyReLU(negative_slope=0.05))
+            elif type_activate.lower() == 'prelu' : 
+                self.fc1.append(nn.PReLU())
+            elif type_activate.lower() == 'elu' : 
+                self.fc1.append(nn.ELU(alpha=1.0))
             elif type_activate.lower() == 'tanh' : 
                 self.fc1.append(nn.Tanh())
+            elif type_activate.lower() == 'sigmoid' : 
+                self.fc2.append(nn.Sigmoid())
             else : 
                 raise ValueError("No such activation layer type defined")
             dim_in = dim_out
@@ -57,13 +63,19 @@ class ActorRNN(nn.Module):
         self.fc2 = nn.ModuleList()
         dim_in = dim_rnn_hidden
         for dim_out in dim_fc2 : 
-            self.fc2.append(nn.Linear(dim_in, dim_out))
+            self.fc2.append(nn.Linear(dim_in, dim_out)) # 这个可以尝试换位置
             if type_activate.lower() == 'relu' : 
                 self.fc2.append(nn.ReLU())
             elif type_activate.lower() == 'leaky_relu' : 
-                self.fc2.append(nn.LeakyReLU())
+                self.fc2.append(nn.LeakyReLU(negative_slope=0.05))
+            elif type_activate.lower() == 'prelu' : 
+                self.fc1.append(nn.PReLU())
+            elif type_activate.lower() == 'elu' : 
+                self.fc1.append(nn.ELU(alpha=1.0))
             elif type_activate.lower() == 'tanh' : 
                 self.fc2.append(nn.Tanh())
+            elif type_activate.lower() == 'sigmoid' : 
+                self.fc2.append(nn.Sigmoid())
             else : 
                 raise ValueError("No such activation layer type defined")
             dim_in = dim_out
@@ -107,15 +119,19 @@ class ActorRNN(nn.Module):
         return P_next_inv, h_next, hidden
     # end function forward
     def weight_init(self) : 
+        if self.type_activate != "elu" and self.type_activate != "prelu":
+            nonlinearity = self.type_activate
+        else :
+            nonlinearity = "leaky_relu"
         for fc in self.fc1 : 
             if isinstance(fc, nn.Linear) : 
-                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=self.type_activate)
+                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=nonlinearity)
         for fc in self.fc2 : 
             if isinstance(fc, nn.Linear) : 
-                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=self.type_activate)
+                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=nonlinearity)
         for fc in self.out : 
             if isinstance(fc, nn.Linear) : 
-                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=self.type_activate)
+                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=nonlinearity)
     # end function weight_init
     def detachHidden(self, hidden):
         if isinstance(hidden, tuple):
@@ -147,6 +163,7 @@ class RL_estimator(est.Estimator):
         self.policy = ActorRNN(dim_input=dim_input, dim_output=dim_output, **nnParams).to(self.device)
         self.optimizer = Adam(self.policy.parameters(), lr=lr)
         self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=50, factor=0.5, min_lr=lr_min, verbose=True)
+        self.window = 2
         super().__init__(name="RL_estimator", x0_hat=x0_hat, P0_hat=P0_hat)
     # end function __init__
     def reset(self, x0_hat, P0_hat) -> None:
@@ -162,17 +179,18 @@ class RL_estimator(est.Estimator):
     # end function reset
     def estimate(self, y, Q, R, isEval:bool=True):
         ds = self.model.dim_state
+        window = self.window
         #region 计算窗口长度可变的优化问题
         self.y_seq.append(y)
-        if len(self.y_seq) > 1 : del self.y_seq[0] # 2是窗口长度
+        if len(self.y_seq) > window : del self.y_seq[0] # window是窗口长度
         result = est.NLSF_uniform(self.P_inv.detach().squeeze().cpu().numpy().reshape((ds,-1)), y_seq=self.y_seq, 
                                   Q=Q, R=R, f=self.model.f, h=self.model.h, F=self.model.F, H=self.model.H, 
                                   mode="quadratic", x0=self.x0_bar_seq[:], x0_bar=self.x0_bar_seq[0], gamma=self.gamma)
         self.x_hat = result.x[-ds:]
         self.y_hat = self.model.h(x=self.x_hat)
         c = 0
-        # EKF方法更新P(直观解释：x0被删去的时候才需要更新P)
-        if len(self.x0_bar_seq) == 1: # 2是窗口长度
+        # RNN前向计算P(直观解释：x0被删去的时候才需要更新P)
+        if len(self.x0_bar_seq) == window: # window是窗口长度
             x0_hat = self.x0_bar_seq[0]
             input = np.tile(np.hstack((x0_hat, self.y_seq[0])), (1,1,1))
             input = torch.from_numpy(input).float().to(self.device)
@@ -183,7 +201,7 @@ class RL_estimator(est.Estimator):
             self.P_hat = fun.inv(self.P_inv.detach().squeeze().cpu().numpy())
         # 更新x0_bar_seq
         self.x0_bar_seq.append(self.x_hat) # 要不用新的就都不用新的，训练的时候是不用新的所以测试也不应该用新的
-        if len(self.x0_bar_seq) > 1 : del self.x0_bar_seq[0] # 2是窗口长度
+        if len(self.x0_bar_seq) > window : del self.x0_bar_seq[0] # window是窗口长度
         return self.x_hat, self.P_inv, c
         #endregion
     # end function estimate
@@ -324,12 +342,11 @@ class RL_estimator(est.Estimator):
                 target_Pinv_seq.append(Ptp1_inv)
                 xt = x_hat_seq[t].reshape(-1,1)
                 xtp1 = x_hat_seq[t+1].reshape(-1,1)
-                ytp1 = y_seq[t].reshape(-1,1)
-                Pt_inv = fun.inv(P_hat_seq[t])
+                dytp1 = (y_seq[t] - self.model.h(x=self.model.f(x=x_hat_seq[t]))).reshape(-1,1)
                 Ft = self.model.F(x=x_hat_seq[t])
-                Qinv = fun.inv(estParams["Q"])
+                Ht = self.model.H(x=self.model.f(x=x_hat_seq[t]))
                 Rinv = fun.inv(estParams["R"])
-                c = c + xt.T@(Pt_inv-Pt_inv.T@fun.inv(Pt_inv+Ft.T@Qinv@Ft)@Pt_inv)@xt + ytp1.T@Rinv@ytp1 - xtp1.T@Ptp1_inv@xtp1
+                c = c + xt.T@Ft.T@Ptp1_inv@Ft@xt - xtp1.T@Ptp1_inv@xtp1 + dytp1.T@Rinv@dytp1 + 2*xt.T@Ft.T@Ht.T@Rinv@dytp1
                 target_c_seq.append(c.item())
             input_seq = torch.FloatTensor(np.stack(input_seq)).unsqueeze(0).to(self.device)
             Pinv_seq, c_seq, _ = self.policy.forward(input_seq, None)
@@ -365,14 +382,14 @@ def main():
     #region 修改参数以便人工测试（自动测试时注释掉，否则参数无法自动变化）
     trainParams["lr"] = 5e-4
     trainParams["lr_min"] = 1e-6
-    trainParams["gamma"] = 0.8
+    trainParams["gamma"] = 1.0
     args.hidden_layer = ([], 64, [128]) # 这几个要同步修改
     nnParams["dim_fc1"] = [] # 这几个要同步修改
     nnParams["dim_rnn_hidden"] = 64 # 这几个要同步修改
     nnParams["dim_fc2"] = [128] # 这几个要同步修改
     nnParams["dropout"] = 0.1
     nnParams["num_rnn_layers"] = 3
-    nnParams["type_activate"] = "relu"
+    nnParams["type_activate"] = "elu"
     nnParams["type_rnn"] = "lstm"
     #endregion
     # 定义估计器类以及获取测试数据
@@ -409,8 +426,10 @@ def main():
     # logfile.endLog()
     #endregion
     #region 加载模型并测试（不训练时才需要加载）
-    agent.load_network("net/RNN_net(12)end")
-    simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
+    agent.load_network("net/RNN_net(41)end")
+    for window in range(1, 6) :
+        agent.window = window
+        simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
     #endregion
 # end function main
 

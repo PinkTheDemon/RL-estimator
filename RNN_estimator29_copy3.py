@@ -84,6 +84,7 @@ class ActorRNN(nn.Module):
         self.out = nn.ModuleList()
         self.out.append(nn.Linear(dim_in, self.dim_output)) # L.flatten
         self.out.append(nn.Linear(dim_in, 1)) # c
+        self.out.append(nn.Linear(dim_in, 3)) # x0hat
         self.weight_init()
         #endregion
     # end function __init__
@@ -114,9 +115,10 @@ class ActorRNN(nn.Module):
         indices = torch.tril_indices(row=ds, col=ds, offset=0) # 获取下三角矩阵的索引
         L[..., indices[0], indices[1]] = outputs[0]
         P_next_inv = L @ L.permute(*range(L.dim() - 2), -1, -2)
-        h_next = outputs[1]
+        c_next = outputs[1]
+        x0_hat = outputs[2]
         #endregion
-        return P_next_inv, h_next, hidden
+        return P_next_inv, c_next, x0_hat, hidden
     # end function forward
     def weight_init(self) : 
         if self.type_activate != "elu" and self.type_activate != "prelu":
@@ -167,32 +169,35 @@ class RL_estimator(est.Estimator):
     # end function __init__
     def reset(self, x0_hat, P0_hat) -> None:
         self.x_hat = x0_hat
+        self.x0_bar = x0_hat
         self.P_hat = P0_hat
         if P0_hat is not None:
             # 保持后续计算的统一性给P矩阵转成tensor
             self.P_inv = torch.FloatTensor(fun.inv(P0_hat))
+            self.x0_bar = torch.FloatTensor(x0_hat)
         self.hidden = None
-        self.policy.eval()
+        self.policy.train()
     # end function reset
     def estimate(self, y, Q, R, isEval:bool=True):
         ds = self.model.dim_state
         result = est.NLSF_uniform(self.P_inv.detach().squeeze().cpu().numpy().reshape((ds,-1)), y_seq=[y], 
                                   Q=Q, R=R, f=self.model.f, h=self.model.h, F=self.model.F, H=self.model.H, 
-                                  mode="quadratic", x0=[self.x_hat], x0_bar=self.x_hat, gamma=self.gamma)
+                                  mode="quadratic", x0=[self.x_hat], x0_bar=self.x0_bar.detach().squeeze().cpu().numpy().reshape((-1,)), gamma=self.gamma)
         # self.status = result.status
         input = np.tile(np.hstack((self.x_hat, y)), (1,1,1))
         input = torch.from_numpy(input).float().to(self.device)
-        # if isEval:
-        #     input.requires_grad_(False)
-        #     self.policy.eval()
-        self.P_inv, c, self.hidden = self.policy.forward(input, self.hidden) ## 这里不一定没计算梯度，可能还是要用到torch.no_grad()或者torch.inference_mode()
+        if isEval:
+            input.requires_grad_(False)
+            self.policy.eval()
+        self.P_inv, c, self.x0_bar, self.hidden = self.policy.forward(input, self.hidden) ## 这里不一定没计算梯度，可能还是要用到torch.no_grad()或者torch.inference_mode()
         self.x_hat = result.x[-ds: ]
         self.y_hat = self.model.h(self.x_hat)
         self.P_hat = fun.inv(self.P_inv.detach().squeeze().cpu().numpy())
-        return self.x_hat, self.P_inv, c
+        return self.x_hat, self.P_inv, c, self.x0_bar
     # end function estimate
     def value(self, x, x_bar, P_inv, c=None):
-        x = torch.Tensor((x - x_bar)).unsqueeze(0)
+        x = torch.Tensor(x)
+        x = (x - x_bar.squeeze().reshape((-1,))).unsqueeze(0)
         Q = x @ P_inv.squeeze().reshape((self.model.dim_state,-1)) @ x.T
         if c is not None:Q += c.squeeze()
         return Q
@@ -242,7 +247,7 @@ class RL_estimator(est.Estimator):
                 if len(y_list) > train_window : del y_list[0]
                 #endregion
                 #region 求解窗口长度为1的非线性最小二乘，得到 x_next_hat
-                x_next_hat, P_inv_next, c_next = self.estimate(y, Q, R, isEval=False)
+                x_next_hat, P_inv_next, c_next, x0_bar_next = self.estimate(y, Q, R, isEval=False)
                 x_hat_seq.append(x_next_hat)
                 y_hat_seq.append(self.model.h(x_next_hat))
                 P_inv_seq.append(P_inv_next.detach().squeeze().cpu().numpy().reshape((ds,-1)))
@@ -250,14 +255,16 @@ class RL_estimator(est.Estimator):
                 #region 计算targetQ和Q
                 if t >= 18: # 窗口大于指定长度开始训练（修改：窗口长度小于指定长度的数据不要）## 是不是等大于多一点的窗口再开始训练好一点？
                     for _ in range(trainParams["aver_num"]): # 为了实现函数拟合，取多个值计算arrival cost值
-                        x_next_noise = x_next_hat + self.noiseGen.getRandom(mean=np.zeros((ds, )), cov=self.cov)
+                        x_next_noise = x0_bar_next.detach().squeeze().cpu().numpy().reshape((-1,)) + self.noiseGen.getRandom(mean=np.zeros((ds, )), cov=self.cov)
                         result = est.NLSF_uniform(P_inv_seq[t-train_window], y_seq=y_list[ :-1], Q=Q, R=R, gamma=self.gamma, 
                                                   f=self.model.f, h=self.model.h, F=self.model.F, H=self.model.H, mode="quadratic-end", 
                                                   x0=x_hat_seq[t-train_window:-1], x0_bar=x_hat_seq[t-train_window], xend=x_next_noise)
                         # end if t(step)
                         min_fun_value = result.fun
                         targetQ = min_fun_value@min_fun_value + (y_list[-1] - self.model.h(x_next_noise))@fun.inv(R)@(y_list[-1] - self.model.h(x_next_noise)) + c.item()
-                        Qvalue = self.value(x=x_next_noise, x_bar=x_next_hat, P_inv=P_inv_next, c=c_next)
+                        Qvalue = self.value(x=x_next_noise, x_bar=x0_bar_next, P_inv=P_inv_next, c=c_next)
+                        targetQ += np.linalg.norm(x_next_hat)
+                        Qvalue += torch.linalg.norm(x0_bar_next.squeeze())
                         targetQ_list.append(targetQ)
                         Q_list.append(Qvalue)
                 #endregion
@@ -310,6 +317,7 @@ class RL_estimator(est.Estimator):
             input_seq = []
             target_Pinv_seq = []
             target_c_seq = []
+            target_xnhat_seq = x_hat_seq[1:]
             c = 0
             for t in range(len(y_seq)):
                 input_seq.append(np.hstack((x_hat_seq[t], y_seq[t])))
@@ -324,20 +332,21 @@ class RL_estimator(est.Estimator):
                 c = c + xt.T@Ft.T@Ptp1_inv@Ft@xt - xtp1.T@Ptp1_inv@xtp1 + dytp1.T@Rinv@dytp1 + 2*xt.T@Ft.T@Ht.T@Rinv@dytp1
                 target_c_seq.append(c.reshape(-1))
             input_seq = torch.FloatTensor(np.stack(input_seq)).unsqueeze(0).to(self.device)
-            Pinv_seq, c_seq, _ = self.policy.forward(input_seq, None)
+            Pinv_seq, c_seq, xnhat_seq, _ = self.policy.forward(input_seq, None)
             target_Pinv_seq = torch.FloatTensor(np.stack(target_Pinv_seq)).unsqueeze(0).to(self.device)
             target_c_seq = torch.zeros_like(c_seq, device=self.device)#torch.FloatTensor(np.stack(target_c_seq)).unsqueeze(0).to(self.device)#
-            loss = F.mse_loss(Pinv_seq, target_Pinv_seq)+F.mse_loss(c_seq, target_c_seq)
+            target_xnhat_seq = torch.FloatTensor(np.stack(target_xnhat_seq)).unsqueeze(0).to(self.device)
+            loss = F.mse_loss(Pinv_seq, target_Pinv_seq)+F.mse_loss(c_seq, target_c_seq) + F.mse_loss(xnhat_seq, target_xnhat_seq)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             # grad_clipping(self.policy, 10)
             optimizer.step()
             scheduler.step(loss)
-            print(f"loss: {loss.item()}")
-            # loss_seq.append(loss.item())
-            # if len(loss_seq) > 10: 
-            #     del loss_seq[0]
-            #     if fun.isConverge(loss_seq): break
+            if i % 10 == 0: print(f"loss: {loss.item()}")
+            loss_seq.append(loss.item())
+            if len(loss_seq) > 10: 
+                del loss_seq[0]
+                if fun.isConverge(loss_seq): break
     # end function initialize
 
 def main():
@@ -355,26 +364,25 @@ def main():
     nnParams = pm.getNNParams(netName="ActorRNN", hidden_layer=args.hidden_layer, dropout=args.dropout, num_rnn_layers=args.num_layer, type_activate=args.act_fun)
     #endregion
     #region 修改参数以便人工测试（自动测试时注释掉，否则参数无法自动变化）
-    trainParams["lr"] = 5e-4
-    trainParams["lr_min"] = 1e-6
-    trainParams["gamma"] = 0.9
-    args.hidden_layer = ([], 64, [128]) # 这几个要同步修改
-    nnParams["dim_fc1"] = [] # 这几个要同步修改
-    nnParams["dim_rnn_hidden"] = 64 # 这几个要同步修改
-    nnParams["dim_fc2"] = [128] # 这几个要同步修改
-    nnParams["dropout"] = 0.1
-    nnParams["num_rnn_layers"] = 3
-    nnParams["type_activate"] = "elu"
-    nnParams["type_rnn"] = "lstm"
+    # trainParams["lr"] = 5e-4
+    # trainParams["lr_min"] = 1e-6
+    # trainParams["gamma"] = 1.0
+    # args.hidden_layer = ([], 64, [128]) # 这几个要同步修改
+    # nnParams["dim_fc1"] = [] # 这几个要同步修改
+    # nnParams["dim_rnn_hidden"] = 64 # 这几个要同步修改
+    # nnParams["dim_fc2"] = [128] # 这几个要同步修改
+    # nnParams["dropout"] = 0.1
+    # nnParams["num_rnn_layers"] = 3
+    # nnParams["type_activate"] = "elu"
+    # nnParams["type_rnn"] = "lstm"
     #endregion
     # 定义估计器类以及获取测试数据
     agent = RL_estimator(model=model, lr=trainParams["lr"], lr_min=trainParams["lr_min"], nnParams=nnParams, 
                          gamma=trainParams["gamma"], device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
     x_batch_test, y_batch_test = getData(modelName=model.name, steps=steps, episodes=episodes, randSeed=randSeed)
     #region 策略网络初始化
-    # simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
-    initNetName = f"net/dcp_{nnParams['type_rnn']}_{nnParams['type_activate']}_dropout{nnParams['dropout']}_layer{nnParams['num_rnn_layers']}_"\
-                  f"{args.hidden_layer}_gamma{trainParams["gamma"]}.mdl"
+    initNetName = f"net/c3{nnParams['type_rnn']}_{nnParams['type_activate']}_dropout{nnParams['dropout']}_layer{nnParams['num_rnn_layers']}_"\
+                  f"{args.hidden_layer}_steps{initsteps}_epis{initepisodes}_randseed{initrandSeed}.mdl"
     if os.path.exists(initNetName):
         agent.policy.load_state_dict(torch.load(initNetName))
     else :
@@ -383,7 +391,8 @@ def main():
         torch.save(agent.policy.state_dict(), initNetName)
     #endregion
     # 加载模型
-    # agent.load_network("net/RNN_net(41)")
+    # agent.load_network("net/RNN_net(39)end")
+    # agent.scheduler.min_lrs = [agent.scheduler.min_lrs[0] / 10]
     #region 相关训练参数打印以及模型训练（训练结束后会自动进行测试）
     logfile = fun.LogFile(fileName="output/log.txt", rename_option=True)
     print("estimator params: ")

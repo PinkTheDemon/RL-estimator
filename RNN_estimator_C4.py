@@ -43,7 +43,7 @@ class ActorRNN(nn.Module):
             elif type_activate.lower() == 'tanh' : 
                 self.fc1.append(nn.Tanh())
             elif type_activate.lower() == 'sigmoid' : 
-                self.fc2.append(nn.Sigmoid())
+                self.fc1.append(nn.Sigmoid())
             else : 
                 raise ValueError("No such activation layer type defined")
             dim_in = dim_out
@@ -68,9 +68,9 @@ class ActorRNN(nn.Module):
             elif type_activate.lower() == 'leaky_relu' : 
                 self.fc2.append(nn.LeakyReLU(negative_slope=0.05))
             elif type_activate.lower() == 'prelu' : 
-                self.fc1.append(nn.PReLU())
+                self.fc2.append(nn.PReLU())
             elif type_activate.lower() == 'elu' : 
-                self.fc1.append(nn.ELU(alpha=1.0))
+                self.fc2.append(nn.ELU(alpha=1.0))
             elif type_activate.lower() == 'tanh' : 
                 self.fc2.append(nn.Tanh())
             elif type_activate.lower() == 'sigmoid' : 
@@ -174,7 +174,7 @@ class RL_estimator(est.Estimator):
         if hasattr(self, "y_pre") : del self.y_pre
         self.policy.train()
     # end function reset
-    def estimate(self, y, Q, R, isEval:bool=True):
+    def estimate(self, y, Q, R, isEval:bool=False):
         #q的初始估计
         if not hasattr(self, "y_pre") :
             self.y_pre = y
@@ -193,11 +193,12 @@ class RL_estimator(est.Estimator):
             self.y_hat[0:3] = y[0:3]
             # self.y_seq.append(y)
             self.x_hat = np.hstack(( q, np.zeros((6,)) ))
+            self.x_hat = q
             # self.x0_bar_seq[0] = self.x_hat
             return 
         #正常情况
         ds = self.model.dim_state
-        P_inv = self.P_inv.detach().squeeze().cpu().numpy().reshape((ds,-1)) + np.eye(ds)*1e-4
+        P_inv = self.P_inv.detach().squeeze().cpu().numpy().reshape((ds,-1)) ##+ np.eye(ds)*1e-4
         result = est.NLSFForC4(model=self.model, x0_bar=self.x_hat, y_seq=[self.y_pre, y], P_inv=P_inv,
                                Q=Q, R=R, x0=[self.x_hat], gamma=self.gamma)
         # self.status = result.status
@@ -273,7 +274,7 @@ class RL_estimator(est.Estimator):
                 P_inv_seq.append(P_inv_next.detach().squeeze().cpu().numpy().reshape((ds,-1)))
                 #endregion
                 #region 计算targetQ和Q
-                if t >= 18: # 窗口大于指定长度开始训练（修改：窗口长度小于指定长度的数据不要）## 是不是等大于多一点的窗口再开始训练好一点？
+                if t >= 5: # 窗口大于指定长度开始训练（修改：窗口长度小于指定长度的数据不要）## 是不是等大于多一点的窗口再开始训练好一点？
                     for _ in range(trainParams["aver_num"]): # 为了实现函数拟合，取多个值计算arrival cost值
                         x_next_noise = x_next_hat + self.noiseGen.getRandom(mean=np.zeros((ds, )), cov=self.cov)
                         result = est.NLSFForC4(model=self.model, x0_bar=x_hat_seq[t-train_window], y_seq=y_list[:-1], P_inv=P_inv_seq[t-train_window], Q=Q, R=R,
@@ -305,7 +306,7 @@ class RL_estimator(est.Estimator):
                 c = c_next
             #region MSE指标计算并打印
             MSE, RMSE = fun.calMSE(x_batch=[x_batch[i][1:]], xhat_batch=[x_hat_seq])
-            print(f"\nstate MSE of batch {i}: MSE = {MSE}, RMSE = {RMSE}")
+            print(f"state MSE of batch {i}: MSE = {MSE}, RMSE = {RMSE}\n")
             # MSE, RMSE = fun.calMSE(x_batch=[y_batch[i]], xhat_batch=[y_hat_seq])
             # print(f"obs MSE of batch {i}: MSE = {MSE}, RMSE = {RMSE}\n", flush=True)
             #endregion
@@ -319,57 +320,109 @@ class RL_estimator(est.Estimator):
         simulate(agent=self, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
         #endregion
     # end function train
+    # def initialize(self, x_batch_init:list, y_batch_init:list, estParams:dict):
+    #     optimizer = Adam(self.policy.parameters(), lr=5e-4)
+    #     scheduler = ReduceLROnPlateau(optimizer, mode='min', patience=50, factor=0.75, min_lr=1e-8, verbose=True)
+    #     ekf = est.EKFForC4(model=self.model)
+    #     loss_seq = []
+    #     for _ in range(5):
+    #         for i in range(len(y_batch_init)):
+    #             x_hat_batch, P_hat_batch = simulate(agent=ekf, estParams=estParams, x_batch=x_batch_init[i:i+1], y_batch=y_batch_init[i:i+1])
+    #             x_hat_seq = x_hat_batch[0]
+    #             P_hat_seq = P_hat_batch[0]
+    #             y_seq = y_batch_init[i]
+    #             x_hat_seq = np.insert(x_hat_seq, 0, estParams["x0_hat"], axis=0)
+    #             P_hat_seq = np.insert(P_hat_seq, 0, estParams["P0_hat"], axis=0)
+    #             input_seq = []
+    #             target_Pinv_seq = []
+    #             # target_c_seq = []
+    #             # c = 0
+    #             for t in range(len(y_seq)):
+    #                 input_seq.append(np.hstack((x_hat_seq[t], y_seq[t])))
+    #                 Ptp1_inv = fun.inv(P_hat_seq[t+1])
+    #                 target_Pinv_seq.append(Ptp1_inv)
+    #                 # xt = x_hat_seq[t].reshape(-1,1)
+    #                 # xtp1 = x_hat_seq[t+1].reshape(-1,1)
+    #                 # dytp1 = (y_seq[t] - self.model.h(x=self.model.f(x=x_hat_seq[t]))).reshape(-1,1)
+    #                 # Ft = self.model.F(x=x_hat_seq[t])
+    #                 # Ht = self.model.H(x=self.model.f(x=x_hat_seq[t]))
+    #                 # Rinv = fun.inv(estParams["R"])
+    #                 # c = c + xt.T@Ft.T@Ptp1_inv@Ft@xt - xtp1.T@Ptp1_inv@xtp1 + dytp1.T@Rinv@dytp1 + 2*xt.T@Ft.T@Ht.T@Rinv@dytp1
+    #                 # target_c_seq.append(c.reshape(-1))
+    #             input_seq = torch.FloatTensor(np.stack(input_seq)).unsqueeze(0).to(self.device)
+    #             Pinv_seq, c_seq, _ = self.policy.forward(input_seq, None)
+    #             target_Pinv_seq = torch.FloatTensor(np.stack(target_Pinv_seq)).unsqueeze(0).to(self.device)
+    #             target_c_seq = torch.zeros_like(c_seq, device=self.device)#torch.FloatTensor(np.stack(target_c_seq)).unsqueeze(0).to(self.device)#
+    #             loss = F.mse_loss(Pinv_seq, target_Pinv_seq)+F.mse_loss(c_seq, target_c_seq)
+    #             optimizer.zero_grad(set_to_none=True)
+    #             loss.backward()
+    #             grad_clipping(self.policy, 10)
+    #             optimizer.step()
+    #             scheduler.step(loss)
+    #             if i % 10 == 0: print(f"loss: {loss.item()}")
+    #             loss_seq.append(loss.item())
+    #             if len(loss_seq) > 10: 
+    #                 del loss_seq[0]
+    #                 if fun.isConverge(loss_seq): break
+    # # end function initialize
     def initialize(self, x_batch_init:list, y_batch_init:list, estParams:dict):
-        optimizer = Adam(self.policy.parameters(), lr=1e-1)
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', patience=50, factor=0.75, min_lr=1e-6, verbose=True)
-        ekf = est.EKFForC4(model=self.model)
+        optimizer = Adam(self.policy.parameters(), lr=1e-3)
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', patience=500, factor=0.75, min_lr=1e-8, verbose=True)
+        agent = est.EKFForC4(model=self.model)
         loss_seq = []
-        for _ in range(4):
-            for i in range(len(y_batch_init)):
-                x_hat_batch, P_hat_batch = simulate(agent=ekf, estParams=estParams, x_batch=x_batch_init[i:i+1], y_batch=y_batch_init[i:i+1])
+        for i in range(len(y_batch_init)):
+            x_hat_batch, P_hat_batch = simulate(agent=agent, estParams=estParams, x_batch=x_batch_init[i:i+1], y_batch=y_batch_init[i:i+1])
+            # x_hat_seq = np.insert(x_hat_seq, 0, estParams["x0_hat"], axis=0)
+            # P_hat_seq = np.insert(P_hat_seq, 0, estParams["P0_hat"], axis=0)
+            for _ in range(5):
                 x_hat_seq = x_hat_batch[0]
                 P_hat_seq = P_hat_batch[0]
                 y_seq = y_batch_init[i]
-                x_hat_seq = np.insert(x_hat_seq, 0, estParams["x0_hat"], axis=0)
-                P_hat_seq = np.insert(P_hat_seq, 0, estParams["P0_hat"], axis=0)
                 input_seq = []
                 target_Pinv_seq = []
-                # target_c_seq = []
-                # c = 0
-                for t in range(len(y_seq)):
+                target_c_seq = []
+                c = 0
+                hiddenState = None
+                for t in range(len(y_seq)-1):
                     input_seq.append(np.hstack((x_hat_seq[t], y_seq[t])))
                     Ptp1_inv = fun.inv(P_hat_seq[t+1])
                     target_Pinv_seq.append(Ptp1_inv)
-                    # xt = x_hat_seq[t].reshape(-1,1)
-                    # xtp1 = x_hat_seq[t+1].reshape(-1,1)
-                    # dytp1 = (y_seq[t] - self.model.h(x=self.model.f(x=x_hat_seq[t]))).reshape(-1,1)
+                    xt = x_hat_seq[t].reshape(-1,1)
+                    xtp1 = x_hat_seq[t+1].reshape(-1,1)
+                    Ptp1 = P_hat_seq[t+1]
+                    dytp1 = (y_seq[t] - self.model.h(x=self.model.f(x=x_hat_seq[t]))).reshape(-1,1)
                     # Ft = self.model.F(x=x_hat_seq[t])
-                    # Ht = self.model.H(x=self.model.f(x=x_hat_seq[t]))
-                    # Rinv = fun.inv(estParams["R"])
-                    # c = c + xt.T@Ft.T@Ptp1_inv@Ft@xt - xtp1.T@Ptp1_inv@xtp1 + dytp1.T@Rinv@dytp1 + 2*xt.T@Ft.T@Ht.T@Rinv@dytp1
-                    # target_c_seq.append(c.reshape(-1))
-                input_seq = torch.FloatTensor(np.stack(input_seq)).unsqueeze(0).to(self.device)
-                Pinv_seq, c_seq, _ = self.policy.forward(input_seq, None)
-                target_Pinv_seq = torch.FloatTensor(np.stack(target_Pinv_seq)).unsqueeze(0).to(self.device)
-                target_c_seq = torch.zeros_like(c_seq, device=self.device)#torch.FloatTensor(np.stack(target_c_seq)).unsqueeze(0).to(self.device)#
-                loss = F.mse_loss(Pinv_seq, target_Pinv_seq)+F.mse_loss(c_seq, target_c_seq)
-                optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                # grad_clipping(self.policy, 10)
-                optimizer.step()
-                scheduler.step(loss)
-                if i % 10 == 0: print(f"loss: {loss.item()}")
-                loss_seq.append(loss.item())
-                if len(loss_seq) > 10: 
-                    del loss_seq[0]
-                    if fun.isConverge(loss_seq): break
+                    Ht = self.model.H(x=self.model.f(x=x_hat_seq[t], omega_pre=y_seq[t][0:3]))
+                    Rinv = fun.inv(estParams["R"])
+                    c = self.gamma * c + dytp1.T @ (Rinv-Rinv@Ht@Ptp1@Ht.T@Rinv) @ dytp1
+                    target_c_seq.append(c.reshape(-1))
+                    if ((t+1) % 500) == 0: # 每500时间步训练一次而不是整个轨迹训练一次
+                        input_seq = torch.FloatTensor(np.stack(input_seq)).unsqueeze(0).to(self.device)
+                        Pinv_seq, c_seq, hiddenState = self.policy.forward(input_seq, hiddenState)
+                        target_Pinv_seq = torch.FloatTensor(np.stack(target_Pinv_seq)).unsqueeze(0).to(self.device)
+                        target_c_seq = torch.FloatTensor(np.stack(target_c_seq)).unsqueeze(0).to(self.device)#torch.zeros_like(c_seq, device=self.device)#
+                        loss = F.mse_loss(Pinv_seq, target_Pinv_seq)+F.mse_loss(c_seq, target_c_seq)
+                        optimizer.zero_grad(set_to_none=True)
+                        loss.backward()
+                        # grad_clipping(self.policy, 10)
+                        optimizer.step()
+                        self.policy.detachHidden(hiddenState)
+                        scheduler.step(loss)
+                        input_seq = []
+                        target_Pinv_seq = []
+                        target_c_seq = []
+                        if i % 10 == 0: print(f"loss: {loss.item()}")
+                        loss_seq.append(loss.item())
+                        if len(loss_seq) > 10: 
+                            del loss_seq[0]
+                            if fun.isConverge(loss_seq): break
     # end function initialize
 
 def main():
     #region 测试的模型和参数
     model = getModel(modelName="Continuous4")
     steps = 5000
-    episodes = 10
+    episodes = 1
     randSeed = 10086
     initsteps = 5000 # 初始化网络用的
     initepisodes = 700 # 初始化网络用的
@@ -380,17 +433,17 @@ def main():
     nnParams = pm.getNNParams(netName="ActorRNN", hidden_layer=args.hidden_layer, dropout=args.dropout, num_rnn_layers=args.num_layer, type_activate=args.act_fun)
     #endregion
     #region 修改参数以便人工测试（自动测试时注释掉，否则参数无法自动变化）
-    # trainParams["lr"] = 5e-3
-    # trainParams["lr_min"] = 1e-6
-    # trainParams["gamma"] = 1.0
-    # args.hidden_layer = ([], 128, [128]) # 这几个要同步修改
-    # nnParams["dim_fc1"] = [] # 这几个要同步修改
-    # nnParams["dim_rnn_hidden"] = 128 # 这几个要同步修改
-    # nnParams["dim_fc2"] = [128] # 这几个要同步修改
-    # nnParams["dropout"] = 0.1
-    # nnParams["num_rnn_layers"] = 1
-    # nnParams["type_activate"] = "elu"
-    # nnParams["type_rnn"] = "lstm"
+    trainParams["lr"] = 5e-3
+    trainParams["lr_min"] = 1e-6
+    trainParams["gamma"] = 0.8
+    args.hidden_layer = ([64,64,64], 64, [64]) # 这几个要同步修改
+    nnParams["dim_fc1"] = [64,64,64] # 这几个要同步修改
+    nnParams["dim_rnn_hidden"] = 64 # 这几个要同步修改
+    nnParams["dim_fc2"] = [64] # 这几个要同步修改
+    nnParams["dropout"] = 0.3
+    nnParams["num_rnn_layers"] = 3
+    nnParams["type_activate"] = "elu"
+    nnParams["type_rnn"] = "lstm"
     #endregion
     # 定义估计器类以及获取测试数据
     agent = RL_estimator(model=model, lr=trainParams["lr"], lr_min=trainParams["lr_min"], nnParams=nnParams, 
@@ -401,39 +454,34 @@ def main():
                   f"{args.hidden_layer}_steps{initsteps}_epis{initepisodes}_randseed{initrandSeed}.mdl"
     if os.path.exists(initNetName):
         agent.policy.load_state_dict(torch.load(initNetName))
-        agent.policy.load_state_dict(torch.load("net/c4lstm_elu_dropout0.1_layer3_([], 128, [128, 128, 128])_steps5000_epis1000_randseed22222.mdl"))
-    else :
+    # else :
         x_batch_init, y_batch_init = getData(modelName=model.name, steps=initsteps, episodes=initepisodes, randSeed=initrandSeed)
         agent.initialize(x_batch_init=x_batch_init, y_batch_init=y_batch_init, estParams=estParams)
         torch.save(agent.policy.state_dict(), initNetName)
     #endregion
     # 加载模型
-    # agent.load_network("net/RNN_net(47)end")
+    # agent.load_network("net/RNN_net(54)end")
     #region 相关训练参数打印以及模型训练（训练结束后会自动进行测试）
-    logfile = fun.LogFile(fileName="output/log.txt", rename_option=True)
-    print("estimator params: ")
-    for key, value in estParams.items() : 
-        print(f"{key}: {value}")
-    print("train params: ")
-    for key, value in trainParams.items() : 
-        print(f"{key}: {value}")
-    print("network params: ")
-    for key, value in nnParams.items() : 
-        print(f"{key}: {value}")
-    print("optimizer params: ")
-    print(f"betas: {agent.optimizer.param_groups[0]['betas']}")
-    print(f"weight_decay: {agent.optimizer.param_groups[0]['weight_decay']}\n", flush=True)
-    print("Before train, the test result: ") # 训练前测试一次估计性能
-    simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
-# state MSE of RL_estimator: [1.48099795e-04 2.69661110e-04 2.54648203e-04 1.96300483e-03
-# 6.28527630e-02 6.47843150e-02 4.14105569e-02 2.53530162e-01
-# 9.46076647e-01 3.96065385e-02], RMSE: 0.37561900867164677
-# average cpu time of RL_estimator: 14.772187500000001 ms
+    # logfile = fun.LogFile(fileName="output/log.txt", rename_option=True)
+    # print("estimator params: ")
+    # for key, value in estParams.items() : 
+    #     print(f"{key}: {value}")
+    # print("train params: ")
+    # for key, value in trainParams.items() : 
+    #     print(f"{key}: {value}")
+    # print("network params: ")
+    # for key, value in nnParams.items() : 
+    #     print(f"{key}: {value}")
+    # print("optimizer params: ")
+    # print(f"betas: {agent.optimizer.param_groups[0]['betas']}")
+    # print(f"weight_decay: {agent.optimizer.param_groups[0]['weight_decay']}\n", flush=True)
+    # print("Before train, the test result: ") # 训练前测试一次估计性能
+    # simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
     # agent.train(x_batch_test=x_batch_test, y_batch_test=y_batch_test, trainParams=trainParams, estParams=estParams)
-    logfile.endLog()
+    # logfile.endLog()
     #endregion
     # 测试
-    # simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
+    simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True, isPlot=False)
 # end function main
 
 if __name__ == '__main__':

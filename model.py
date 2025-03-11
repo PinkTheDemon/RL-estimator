@@ -54,7 +54,7 @@ class Discrete1(Model):
         super().__init__("Discrete1", 2, 1)
         self.modelErr = False
 
-    def f(self, x, **args) : 
+    def f(self, x, dt=None, **args) : 
         x_next = np.zeros_like(x)
         x_next[0] = 0.99*x[0] + 0.2*x[1]
         x_next[1] = -0.1*x[0] + 0.5*x[1]/(1+x[1]**2)
@@ -73,12 +73,12 @@ class Discrete1(Model):
 
 # 洛伦兹吸引子
 class Continuous1(Model):
-    def __init__(self, sampleTime=0.1) -> None:
+    def __init__(self, sampleTime=0.01) -> None:
         super().__init__("Continuous1", 3, 2)
         self.modelErr = False
         self.sampleTime = sampleTime
 
-    def f(self, x, **args) : 
+    def f(self, x, dt=None, **args) : 
         xdot = lambda t, y : ( np.array([
             10*(-y[0]+y[1]),
             28*y[0] - y[1] - y[0]*y[2],
@@ -408,6 +408,7 @@ class Continuous4(Model):
         dt = self.sampleTime
         F = expm(0.5*self.Omega(omega_pre)*dt)
         return block_diag(( F, np.eye(6) ))
+        # return F
 
     def h(self, x, **args) : 
         yg = self.omega(t=self.t)
@@ -422,6 +423,9 @@ class Continuous4(Model):
         Hg = np.zeros((3,10)) # np.hstack(( np.zeros((3,4)), np.eye(3), np.zeros((3,3)) ))
         Ha = np.hstack(( (self.Cnb_prime(q=x[0:4])@self.g).T, np.eye(3), np.zeros((3,3)) ))#
         Hm = np.hstack(( (self.Cnb_prime(q=x[0:4])@self.m).T, np.zeros((3,3)), np.eye(3) ))
+        # Hg = np.zeros((3,4))
+        # Ha = (self.Cnb_prime(q=x[0:4])@self.g).T
+        # Hm = (self.Cnb_prime(q=x[0:4])@self.m).T
         return np.vstack(( Hg, Ha, Hm ))#
 
     def Omega(self, w) :
@@ -530,9 +534,22 @@ class Continuous4(Model):
         ])
         return C_hat
 
-    def omega(self, t, rateMode="mult_ramp") : # 生成真实角速度数据
+    def omega(self, t, rateMode="sine") : # 生成真实角速度数据 ## 修改角速度生成方式
         N = self.N_sample
         n = int(t / self.sampleTime)
+        if rateMode.lower() == "sine" :
+            if (n < 0.25*N) :
+                w = np.array((np.sin(4*np.pi*n/(0.25*N)), 0, 0))
+            
+            elif (0.25*N <= n and n < 0.5*N) :
+                w = np.array((0, np.sin(4*np.pi*(n-0.25*N)/(0.25*N)), 0))
+
+            elif (0.5*N <= n and n < 0.75*N) :
+                w = np.array((0, 0, np.sin(4*np.pi*(n-0.5*N)/(0.25*N))))
+
+            elif (0.75*N <= n and n <= N) :
+                w = np.array((np.sin(4*np.pi*(n-0.75*N)/(0.25*N)), np.sin(4*np.pi*(n-0.75*N)/(0.25*N)), np.sin(4*np.pi*(n-0.75*N)/(0.25*N))))
+
         if rateMode.lower() == "mult_ramp" :
             if (0 <= n and n < 5/20 * N) :
                 w =np.array((0, 0, 0))

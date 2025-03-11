@@ -31,25 +31,42 @@ def simulate(agent:est.Estimator, estParams, x_batch, y_batch, isPrint=False, is
         xhat_seq = []
         yhat_seq = []
         Phat_seq = []
+        seq_time = 0
         agent.reset(x0_hat=estParams["x0_hat"], P0_hat=estParams["P0_hat"])
-        timeStart = time.process_time()
         # 单条轨迹估计
         for y in y_seq:
+            timeStart = time.time()
             agent.estimate(y=y, Q=estParams["Q"], R=estParams["R"])
+            timeEnd = time.time()
+            seq_time += timeEnd - timeStart
             xhat_seq.append(agent.x_hat)
             yhat_seq.append(agent.y_hat)
             Phat_seq.append(agent.P_hat)
-        timeEnd = time.process_time()
-        execution_time += 1000 * (timeEnd - timeStart) / steps / episodes
+        execution_time += 1000 * seq_time / steps / episodes
         xhat_batch.append(xhat_seq)
         yhat_batch.append(yhat_seq)
         Phat_batch.append(Phat_seq)
         agent.reset(x0_hat=estParams["x0_hat"], P0_hat=estParams["P0_hat"])
     #endregion 状态估计
+    #region 保存数据temp
+    # import pickle
+    # if agent.name == "EKF":
+    #     fileName = f"data/EKF"
+    #     with open(file=fileName+".bin", mode="wb") as f:
+    #         pickle.dump(xhat_batch, f)
+    # elif agent.name == "MHE":
+    #     fileName = f"data/MHE_window{estParams['window']}"
+    #     with open(file=fileName+".bin", mode="wb") as f:
+    #         pickle.dump(xhat_batch, f)
+    # elif agent.name == "RL_estimator":
+    #     fileName = f"data/RA-MHE"
+    #     with open(file=fileName+".bin", mode="wb") as f:
+    #         pickle.dump(xhat_batch, f)
+    #endregion 保存数据
     # 打印
     if isPrint:
         # 计算性能指标
-        MSE_x, RMSE_x = fc.calMSE(x_batch=[x_seq[1:] for x_seq in x_batch], xhat_batch=[x_seq[1:] for x_seq in xhat_batch])
+        MSE_x, RMSE_x = fc.calMSE(x_batch=[x_seq[:] for x_seq in x_batch], xhat_batch=[x_seq[:] for x_seq in xhat_batch])
         # MSE_y, RMSE_y = fc.calMSE(x_batch=y_batch, xhat_batch=yhat_batch)
         print(f"state MSE of {agent.name}: {MSE_x}, RMSE: {RMSE_x}")
         # print(f"observation MSE of {agent.name}: {MSE_y}, RMSE: {RMSE_y}")
@@ -59,6 +76,7 @@ def simulate(agent:est.Estimator, estParams, x_batch, y_batch, isPrint=False, is
     # 绘图
     if isPlot:
         plotTrajectory(x_seq=x_batch[-1][1:], x_hat_seq=xhat_seq[1:], STATUS=agent.name)
+        plotTrajectory(x_seq=y_seq, x_hat_seq=y_seq, STATUS=agent.name)
         plt.show()
 
 if __name__ == "__main__" : 
@@ -73,7 +91,7 @@ if __name__ == "__main__" :
     isPrint = True
     isPlot = False
     # 选择执行测试的方法
-    test_options = ["EKF", "EKF-MHE"] # , "UKF", "UKF-MHE", "FIE", "IEKF"
+    test_options = ["EKF", "EKF-MHE"] # , "UKF", "PF", "UKF-MHE", "FIE", "IEKF"
     # 生成数据以及参数
     x_batch, y_batch = getData(modelName=model.name, steps=steps, episodes=episodes, randSeed=randSeed)
     modelParams = getModelParams(modelName=model.name)
@@ -93,10 +111,10 @@ if __name__ == "__main__" :
     for status in test_options:
         print(f"{status.upper()}:", flush=True)
         if status.upper() == "EKF-MHE":
-            for i in range(1,10):
+            for i in range(1,6):
                 estParams["window"] = i
                 print("window length:", estParams["window"])
-                logfile.flush()
+                # logfile.flush()
                 # 生成EKF-MHE类
                 if model.name == "Continuous2" :
                     agent = est.MHEForQuat(model=model, window=estParams["window"])
@@ -118,5 +136,28 @@ if __name__ == "__main__" :
                 agent = est.EKF(f_fn=f, h_fn=h, F_fn=F, H_fn=H)
             simulate(agent=agent, estParams=estParams, x_batch=x_batch, y_batch=y_batch, isPrint=isPrint, isPlot=isPlot)
             print("********************")
+        elif status.upper() == "UKF":
+            # 生成UKF类
+            if model.name == "Continuous2" :
+                agent = est.EKFForQuat(model=model)
+            elif model.name == "Continuous4" :
+                agent = est.EKFForC4(model=model)
+            else :
+                f, h, F, H = getSysFuns(model=model, modelErr=estParams["modelErr"])
+                agent = est.UKF(dim_x=model.dim_state, dim_z=model.dim_obs, dt=None, hx=h, fx=f)
+            simulate(agent=agent, estParams=estParams, x_batch=x_batch, y_batch=y_batch, isPrint=isPrint, isPlot=isPlot)
+            print("********************")
+        elif status.upper() == "PF":
+            # 生成PF类
+            if model.name == "Continuous2" :
+                agent = est.EKFForQuat(model=model)
+            elif model.name == "Continuous4" :
+                agent = est.EKFForC4(model=model)
+            else :
+                f, h, F, H = getSysFuns(model=model, modelErr=estParams["modelErr"])
+                agent = est.ParticleFilter(state_dim=model.dim_state, obs_dim=model.dim_obs, num_particles=1000, fx=f, hx=h)
+            simulate(agent=agent, estParams=estParams, x_batch=x_batch, y_batch=y_batch, isPrint=isPrint, isPlot=isPlot)
+            print("********************")
+        logfile.flush()
     logfile.endLog()
     #endregion
