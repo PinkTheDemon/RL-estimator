@@ -3,9 +3,12 @@ import matplotlib.pyplot as plt
 
 from functions import checkFilename
 
-plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
+plt.rcParams["font.family"] = ["Times New Roman", "SimSun"]  # 英文字体为新罗马，中文字体为宋体
+plt.rcParams["font.serif"] = ["Times New Roman", "SimSun"]  # 衬线字体
+plt.rcParams["font.sans-serif"] = ["Times New Roman", "SimSun", "Arial", "SimHei"]  # 无衬线字体，与Latex相关
+plt.rcParams["mathtext.fontset"] = "custom" # 设置LaTeX字体为用户自定义，这里演示，就不用computer modern了
 plt.rcParams['axes.unicode_minus'] = False 
-plt.rcParams['font.size'] = 28
+
 
 def plotReward(rewardSeq, eps:int=None, filename=None) -> None : 
     if eps is None :
@@ -30,7 +33,7 @@ def plotReward(rewardSeq, eps:int=None, filename=None) -> None :
     plt.plot(tSeq, smoothedReward)
     # plt.title("loss curve")
     plt.xlabel("训练集数")
-    plt.ylabel("训练误差")
+    plt.ylabel(r"$loss$")
     if filename is not None : 
         filename = checkFilename(filename)
         plt.savefig(filename)
@@ -136,7 +139,7 @@ def plotStepMSE(isSave=False):
     e_MHE6 = np.mean(np.sum(np.square(xhat_batch_MHE6-x_batch), axis=-1), axis=0)
     e_RA = np.mean(np.sum(np.square(xhat_batch_RA-x_batch), axis=-1), axis=0)
     t_seq = range(1,len(e_EKF)+1)
-    fig, (ax1, ax2) = plt.subplots(1,2, figsize=(20,10), sharey=True)
+    fig, (ax1, ax2) = plt.subplots(1,2, figsize=(20,15), sharey=True)
     # 设置每个子图的x轴范围
     ax1.set_xlim(1, 10)
     ax2.set_xlim(80, 100)
@@ -165,7 +168,7 @@ def plotStepMSE(isSave=False):
     ax1.grid(True)
     ax2.grid(True)
     ax2.legend()
-    ax2.set_xlabel('时间步')
+    ax2.set_xlabel('time steps')
     ax1.set_ylabel(r'$e_t$')
 
     # 隐藏第二个子图的左边框和第一个子图的右边框
@@ -181,7 +184,7 @@ def plotStepMSE(isSave=False):
     ax2.plot((-d, +d), (-d, +d), **kwargs)  # 右下到左上
     plt.subplots_adjust(wspace=0.1)
     if isSave:
-        plt.savefig("picture/step_MSE(CHS).eps")
+        plt.savefig("picture/step_MSE.eps")
         # plt.savefig("picture/step_MSE.png")
 
 def plotStateMSE(isSave=False):
@@ -227,7 +230,7 @@ def plotStateMSE(isSave=False):
     xhat_seq_RA = xhat_batch_RA[0]
     x_seq = x_batch[0]
     t_seq = range(1,len(x_seq)+1)
-    fig, axs = plt.subplots(3,2, figsize=(22,16), sharey=True)
+    fig, axs = plt.subplots(3,2, figsize=(20,20), sharey=True)
     # 设置每个子图的x轴范围
     axs[0,0].set_xlim(1, 10)
     axs[1,0].set_xlim(1, 10)
@@ -374,6 +377,7 @@ def plot3DTraj(isSave=False) :
         plt.savefig("picture/Lorenz_attractor_3D_traj.eps")
 
 if __name__ == "__main__" : 
+    plt.rcParams['font.size'] = 28
     #region 绘制损失函数曲线
 #     rewardSeq = [
 # 15049.515625,
@@ -1577,9 +1581,11 @@ if __name__ == "__main__" :
 # 458.1685485839844,
 # 564.7498779296875
 #     ]
-#     plotReward(rewardSeq, eps=300, filename="picture/train_loss(CHS).eps") #
+#     plotReward(rewardSeq, eps=300, filename="picture/train_loss(CHS).eps") #pre
     #endregion
 
-    plot3DTraj(isSave=True)
+    plotStateMSE(isSave=False)
+    # plotStepMSE(isSave=False)
+    # plot3DTraj(isSave=True)
 
     plt.show()

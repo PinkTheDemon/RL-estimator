@@ -427,7 +427,7 @@ def main():
     #endregion
     #region 加载模型并测试（不训练时才需要加载）
     agent.load_network("net/RNN_net(41)end")
-    for window in range(1, 6) :
+    for window in range(1, 2) :
         agent.window = window
         simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
     #endregion

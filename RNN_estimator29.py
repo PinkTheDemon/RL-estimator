@@ -248,7 +248,7 @@ class RL_estimator(est.Estimator):
                 P_inv_seq.append(P_inv_next.detach().squeeze().cpu().numpy().reshape((ds,-1)))
                 #endregion
                 #region 计算targetQ和Q
-                if t >= 18: # 窗口大于指定长度开始训练（修改：窗口长度小于指定长度的数据不要）## 是不是等大于多一点的窗口再开始训练好一点？
+                if t >= train_window: # 窗口大于指定长度开始训练
                     for _ in range(trainParams["aver_num"]): # 为了实现函数拟合，取多个值计算arrival cost值
                         x_next_noise = x_next_hat + self.noiseGen.getRandom(mean=np.zeros((ds, )), cov=self.cov)
                         result = est.NLSF_uniform(P_inv_seq[t-train_window], y_seq=y_list[ :-1], Q=Q, R=R, gamma=self.gamma, 
@@ -334,10 +334,10 @@ class RL_estimator(est.Estimator):
             optimizer.step()
             scheduler.step(loss)
             print(f"loss: {loss.item()}")
-            # loss_seq.append(loss.item())
-            # if len(loss_seq) > 10: 
-            #     del loss_seq[0]
-            #     if fun.isConverge(loss_seq): break
+            loss_seq.append(loss.item())
+            if len(loss_seq) > 10: 
+                del loss_seq[0]
+                if fun.isConverge(loss_seq): break
     # end function initialize
 
 def main():
@@ -357,7 +357,7 @@ def main():
     #region 修改参数以便人工测试（自动测试时注释掉，否则参数无法自动变化）
     trainParams["lr"] = 5e-4
     trainParams["lr_min"] = 1e-6
-    trainParams["gamma"] = 0.9
+    trainParams["gamma"] = 1.0
     args.hidden_layer = ([], 64, [128]) # 这几个要同步修改
     nnParams["dim_fc1"] = [] # 这几个要同步修改
     nnParams["dim_rnn_hidden"] = 64 # 这几个要同步修改
@@ -373,8 +373,8 @@ def main():
     x_batch_test, y_batch_test = getData(modelName=model.name, steps=steps, episodes=episodes, randSeed=randSeed)
     #region 策略网络初始化
     # simulate(agent=agent, estParams=estParams, x_batch=x_batch_test, y_batch=y_batch_test, isPrint=True)
-    initNetName = f"net/dcp_{nnParams['type_rnn']}_{nnParams['type_activate']}_dropout{nnParams['dropout']}_layer{nnParams['num_rnn_layers']}_"\
-                  f"{args.hidden_layer}_gamma{trainParams["gamma"]}.mdl"
+    initNetName = f"net/{nnParams['type_rnn']}_{nnParams['type_activate']}_dropout{nnParams['dropout']}_layer{nnParams['num_rnn_layers']}_"\
+                  f"{args.hidden_layer}_steps{initsteps}_epis{initepisodes}_randseed{initrandSeed}.mdl"
     if os.path.exists(initNetName):
         agent.policy.load_state_dict(torch.load(initNetName))
     else :

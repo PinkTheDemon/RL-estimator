@@ -66,7 +66,7 @@ def simulate(agent:est.Estimator, estParams, x_batch, y_batch, isPrint=False, is
     # 打印
     if isPrint:
         # 计算性能指标
-        MSE_x, RMSE_x = fc.calMSE(x_batch=[x_seq[:] for x_seq in x_batch], xhat_batch=[x_seq[:] for x_seq in xhat_batch])
+        MSE_x, RMSE_x = fc.calMSE(x_batch=x_batch, xhat_batch=xhat_batch)
         # MSE_y, RMSE_y = fc.calMSE(x_batch=y_batch, xhat_batch=yhat_batch)
         print(f"state MSE of {agent.name}: {MSE_x}, RMSE: {RMSE_x}")
         # print(f"observation MSE of {agent.name}: {MSE_y}, RMSE: {RMSE_y}")
@@ -81,17 +81,15 @@ def simulate(agent:est.Estimator, estParams, x_batch, y_batch, isPrint=False, is
 
 if __name__ == "__main__" : 
     # 选择模型、仿真步数以及轨迹条数
-    model = getModel(modelName="Continuous4")
-    # model.sampleTime=0.01
-    # model.N_sample=20000 # 要想改生成的数据，必须去模型定义那里改
-    steps = 5000
-    episodes = 10
+    model = getModel(modelName="Continuous1")
+    steps = 100
+    episodes = 50
     randSeed = 10086
     modelErr = False
     isPrint = True
     isPlot = False
     # 选择执行测试的方法
-    test_options = ["EKF", "EKF-MHE"] # , "UKF", "PF", "UKF-MHE", "FIE", "IEKF"
+    test_options = ["EKF"] # , "UKF", "PF", "FIE", "EKF-MHE"
     # 生成数据以及参数
     x_batch, y_batch = getData(modelName=model.name, steps=steps, episodes=episodes, randSeed=randSeed)
     modelParams = getModelParams(modelName=model.name)
@@ -114,7 +112,7 @@ if __name__ == "__main__" :
             for i in range(1,6):
                 estParams["window"] = i
                 print("window length:", estParams["window"])
-                # logfile.flush()
+                logfile.flush()
                 # 生成EKF-MHE类
                 if model.name == "Continuous2" :
                     agent = est.MHEForQuat(model=model, window=estParams["window"])

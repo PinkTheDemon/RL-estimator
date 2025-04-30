@@ -122,15 +122,29 @@ class ActorRNN(nn.Module):
             nonlinearity = self.type_activate
         else :
             nonlinearity = "leaky_relu"
-        for fc in self.fc1 : 
-            if isinstance(fc, nn.Linear) : 
-                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=nonlinearity)
-        for fc in self.fc2 : 
-            if isinstance(fc, nn.Linear) : 
-                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=nonlinearity)
-        for fc in self.out : 
-            if isinstance(fc, nn.Linear) : 
-                nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=nonlinearity)
+        # for fc in self.fc1 : 
+        #     if isinstance(fc, nn.Linear) : 
+        #         nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=nonlinearity)
+        # for fc in self.fc2 : 
+        #     if isinstance(fc, nn.Linear) : 
+        #         nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=nonlinearity)
+        # for fc in self.out : 
+        #     if isinstance(fc, nn.Linear) : 
+        #         nn.init.kaiming_uniform_(fc.weight, mode="fan_in", nonlinearity=nonlinearity)
+        for name, param in self.named_parameters():
+            if 'weight' in name:  # 处理权重
+                if 'rnn' in name:  # RNN层权重
+                    if 'hh' in name:  # 循环权重 (hidden-to-hidden)
+                        nn.init.orthogonal_(param)  # 正交初始化
+                    elif 'ih' in name:  # 输入权重 (input-to-hidden)
+                        nn.init.xavier_uniform_(param)  # Xavier初始化（适用于tanh）
+                elif 'fc' in name:  # 全连接层权重
+                    if nonlinearity == "tanh" or nonlinearity == "sigmoid":
+                        nn.init.xavier_uniform_(param)
+                    else :
+                        nn.init.kaiming_uniform_(param, nonlinearity=nonlinearity)  # He初始化（适用于ReLU）
+            elif 'bias' in name:  # 处理偏置
+                nn.init.zeros_(param)  # 偏置初始化为0
     # end function weight_init
     def detachHidden(self, hidden):
         if isinstance(hidden, tuple):
@@ -159,9 +173,10 @@ class RL_estimator(est.Estimator):
         dim_output = fun.ds2do(model.dim_state)
         self.device = device
         self.gamma = gamma
-        self.policy = ActorRNN(dim_input=dim_input, dim_output=dim_output, device=self.device, **nnParams)
+        self.policy = ActorRNN(dim_input=dim_input, dim_output=dim_output, device=self.device, **nnParams).to(self.device)
         self.optimizer = Adam(self.policy.parameters(), lr=lr)
-        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=50, factor=0.75, min_lr=lr_min, verbose=True)
+        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', patience=50, factor=0.75, min_lr=lr_min)
+        self.lr = lr
         super().__init__(name="RL_estimator", x0_hat=x0_hat, P0_hat=P0_hat)
     # end function __init__
     def reset(self, x0_hat, P0_hat) -> None:
@@ -193,7 +208,7 @@ class RL_estimator(est.Estimator):
             self.y_hat[0:3] = y[0:3]
             # self.y_seq.append(y)
             self.x_hat = np.hstack(( q, np.zeros((6,)) ))
-            self.x_hat = q
+            # self.x_hat = q
             # self.x0_bar_seq[0] = self.x_hat
             return 
         #正常情况
@@ -300,6 +315,10 @@ class RL_estimator(est.Estimator):
                     print(f"loss: {loss.item()}", flush=True)
                     loss_seq.append(loss.item())
                     self.scheduler.step(loss) # 学习率更新
+                    new_lr = self.scheduler.get_last_lr()
+                    if self.lr != new_lr :
+                        print(f"learning rate updated: {self.lr} -> {new_lr}")
+                        self.lr = new_lr
                     if loss.item() < min_loss or min_loss == 0: # 保存学习过程中loss最低的模型
                         min_loss = loss.item()
                         self.save_network(saveFile)
@@ -367,14 +386,15 @@ class RL_estimator(est.Estimator):
     # # end function initialize
     def initialize(self, x_batch_init:list, y_batch_init:list, estParams:dict):
         optimizer = Adam(self.policy.parameters(), lr=1e-3)
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', patience=500, factor=0.75, min_lr=1e-8, verbose=True)
+        lr = 1e-2
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', patience=50, factor=0.75, min_lr=1e-6)
         agent = est.EKFForC4(model=self.model)
         loss_seq = []
         for i in range(len(y_batch_init)):
             x_hat_batch, P_hat_batch = simulate(agent=agent, estParams=estParams, x_batch=x_batch_init[i:i+1], y_batch=y_batch_init[i:i+1])
             # x_hat_seq = np.insert(x_hat_seq, 0, estParams["x0_hat"], axis=0)
             # P_hat_seq = np.insert(P_hat_seq, 0, estParams["P0_hat"], axis=0)
-            for _ in range(5):
+            for j in range(5):
                 x_hat_seq = x_hat_batch[0]
                 P_hat_seq = P_hat_batch[0]
                 y_seq = y_batch_init[i]
@@ -387,31 +407,35 @@ class RL_estimator(est.Estimator):
                     input_seq.append(np.hstack((x_hat_seq[t], y_seq[t])))
                     Ptp1_inv = fun.inv(P_hat_seq[t+1])
                     target_Pinv_seq.append(Ptp1_inv)
-                    xt = x_hat_seq[t].reshape(-1,1)
-                    xtp1 = x_hat_seq[t+1].reshape(-1,1)
-                    Ptp1 = P_hat_seq[t+1]
-                    dytp1 = (y_seq[t] - self.model.h(x=self.model.f(x=x_hat_seq[t]))).reshape(-1,1)
-                    # Ft = self.model.F(x=x_hat_seq[t])
-                    Ht = self.model.H(x=self.model.f(x=x_hat_seq[t], omega_pre=y_seq[t][0:3]))
-                    Rinv = fun.inv(estParams["R"])
-                    c = self.gamma * c + dytp1.T @ (Rinv-Rinv@Ht@Ptp1@Ht.T@Rinv) @ dytp1
-                    target_c_seq.append(c.reshape(-1))
-                    if ((t+1) % 500) == 0: # 每500时间步训练一次而不是整个轨迹训练一次
+                    # xt = x_hat_seq[t].reshape(-1,1)
+                    # xtp1 = x_hat_seq[t+1].reshape(-1,1)
+                    # Ptp1 = P_hat_seq[t+1]
+                    # dytp1 = (y_seq[t] - self.model.h(x=self.model.f(x=x_hat_seq[t]))).reshape(-1,1)
+                    # # Ft = self.model.F(x=x_hat_seq[t])
+                    # Ht = self.model.H(x=self.model.f(x=x_hat_seq[t], omega_pre=y_seq[t][0:3]))
+                    # Rinv = fun.inv(estParams["R"])
+                    # c = self.gamma * c + dytp1.T @ (Rinv-Rinv@Ht@Ptp1@Ht.T@Rinv) @ dytp1
+                    # target_c_seq.append(c.reshape(-1))
+                    if ((t+1) % 4999) == 0: # 每500时间步训练一次而不是整个轨迹训练一次
                         input_seq = torch.FloatTensor(np.stack(input_seq)).unsqueeze(0).to(self.device)
                         Pinv_seq, c_seq, hiddenState = self.policy.forward(input_seq, hiddenState)
                         target_Pinv_seq = torch.FloatTensor(np.stack(target_Pinv_seq)).unsqueeze(0).to(self.device)
-                        target_c_seq = torch.FloatTensor(np.stack(target_c_seq)).unsqueeze(0).to(self.device)#torch.zeros_like(c_seq, device=self.device)#
-                        loss = F.mse_loss(Pinv_seq, target_Pinv_seq)+F.mse_loss(c_seq, target_c_seq)
+                        target_c_seq = torch.zeros_like(c_seq, device=self.device)#torch.FloatTensor(np.stack(target_c_seq)).unsqueeze(0).to(self.device)#
+                        loss = F.mse_loss(Pinv_seq[:,1:], target_Pinv_seq[:,1:])+F.mse_loss(c_seq, target_c_seq)
                         optimizer.zero_grad(set_to_none=True)
                         loss.backward()
                         # grad_clipping(self.policy, 10)
                         optimizer.step()
                         self.policy.detachHidden(hiddenState)
                         scheduler.step(loss)
+                        new_lr = scheduler.get_last_lr()
+                        if new_lr != lr : 
+                            print(f"learning rate update: {lr} -> {new_lr}")
+                            lr = new_lr
                         input_seq = []
                         target_Pinv_seq = []
                         target_c_seq = []
-                        if i % 10 == 0: print(f"loss: {loss.item()}")
+                        if t == 4998 and j == 0: print(f"loss: {loss.item()}")
                         loss_seq.append(loss.item())
                         if len(loss_seq) > 10: 
                             del loss_seq[0]
@@ -425,8 +449,8 @@ def main():
     episodes = 1
     randSeed = 10086
     initsteps = 5000 # 初始化网络用的
-    initepisodes = 700 # 初始化网络用的
-    initrandSeed = 22222 # 初始化网络用的
+    initepisodes = 100 # 初始化网络用的
+    initrandSeed = 0 # 初始化网络用的
     args = pm.parseParams()
     estParams = pm.getEstParams(modelName=model.name)
     trainParams = pm.getTrainParams(estorName="RL_estimator", cov=args.cov, gamma=args.gamma)
@@ -435,14 +459,14 @@ def main():
     #region 修改参数以便人工测试（自动测试时注释掉，否则参数无法自动变化）
     trainParams["lr"] = 5e-3
     trainParams["lr_min"] = 1e-6
-    trainParams["gamma"] = 0.8
+    trainParams["gamma"] = 1.0
     args.hidden_layer = ([64,64,64], 64, [64]) # 这几个要同步修改
     nnParams["dim_fc1"] = [64,64,64] # 这几个要同步修改
     nnParams["dim_rnn_hidden"] = 64 # 这几个要同步修改
     nnParams["dim_fc2"] = [64] # 这几个要同步修改
     nnParams["dropout"] = 0.3
-    nnParams["num_rnn_layers"] = 3
-    nnParams["type_activate"] = "elu"
+    nnParams["num_rnn_layers"] = 10
+    nnParams["type_activate"] = "relu"
     nnParams["type_rnn"] = "lstm"
     #endregion
     # 定义估计器类以及获取测试数据
@@ -455,6 +479,7 @@ def main():
     if os.path.exists(initNetName):
         agent.policy.load_state_dict(torch.load(initNetName))
     # else :
+        # agent.policy.load_state_dict(torch.load("net/c4lstm_relu_dropout0.3_layer10_([64, 64, 64], 64, [64])_steps5000_epis700_randseed22222.mdl"))
         x_batch_init, y_batch_init = getData(modelName=model.name, steps=initsteps, episodes=initepisodes, randSeed=initrandSeed)
         agent.initialize(x_batch_init=x_batch_init, y_batch_init=y_batch_init, estParams=estParams)
         torch.save(agent.policy.state_dict(), initNetName)

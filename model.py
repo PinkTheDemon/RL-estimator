@@ -652,6 +652,3 @@ class Continuous3(Model):
 def getModel(modelName) :
     if modelName == "Discrete1": return Discrete1()
     if modelName == "Continuous1": return Continuous1()
-    if modelName == "Continuous2": return Continuous2()
-    if modelName == "Continuous3": return Continuous3()
-    if modelName == "Continuous4": return Continuous4()

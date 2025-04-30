@@ -69,9 +69,9 @@ def getEstParams(modelName, **kwargs):
         }
     elif modelName == "Continuous1":
         estParams = {
-            "x0_hat": np.array([10, 10, 10]),
-            "P0_hat": np.diag((1., 1., 1.)),
-            "Q": np.diag((0, 1e-2, 1e-2)),
+            "x0_hat": np.array([1, 1, 1]),
+            "P0_hat": np.diag((10., 10., 10.)),
+            "Q": np.diag((1e-2, 1e-2, 1e-2)),
             "R": np.diag((1e-2, 1e-2)),
         }
     elif modelName == "Continuous2":
@@ -94,14 +94,14 @@ def getEstParams(modelName, **kwargs):
 def getTrainParams(estorName, **kwargs):
     if estorName == "RL_estimator":
         trainParams = {
-            "steps": 5000,
-            "episodes": 29,
+            "steps": 100,
+            "episodes": 300,
             "randSeed": 0,
-            "lr": 1e-2,
+            "lr": 5e-3,
             "lr_min": 1e-5,
-            "train_window": 2,
-            "aver_num": 20,
-            "seq_len": 400,
+            "train_window": 4,
+            "aver_num": 50,
+            "seq_len": 20,
             "saveFile": "net/RNN_net", #base name without suffix
         }
     trainParams |= kwargs
