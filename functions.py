@@ -63,7 +63,7 @@ def ds2do(dim_input:int) :
 def do2ds(dim_output:int) : 
     return int(np.sqrt(2*(dim_output)))
 
-
+# 用于检查是否存在同名文件，如果存在同名文件，则自动在文件名后面加上小括号以及数字，确保文件名不重复
 def checkFilename(filename:str, suffix:str=None) -> str : 
     if suffix is None:
         baseName, extension = os.path.splitext(filename)
@@ -82,9 +82,10 @@ def checkFilename(filename:str, suffix:str=None) -> str :
         baseName, _ = os.path.splitext(filename)
         return baseName
 
+# 用于将print函数的输出重定向到指定文件的类，具体使用方法可以参考代码中的实现案例
 class LogFile() : 
     def __init__(self, fileName='output/log.txt', rename_option=False) -> None:
-        # 保留现场
+        # 保留现场（还没做）
         
         # 文件已经存在则自动更名
         if rename_option : 
@@ -114,7 +115,7 @@ class LogFile() :
     def __del__(self) -> None:
         self.endLog()
 
-
+# 在将 || x_bar - x ||^2_P3d + c 形式的到达代价转换成 || (x, 1) ||^2_P4d 形式时，系数矩阵的变换函数，注意只适用于状态为3维的情况
 def P3dtoP4d(x_bar, P3d, h3d=None) : 
     x_bar = x_bar.reshape(1,-1)
     P4d = np.array([[(x_bar@P3d@x_bar.T).item(), -(x_bar@P3d[:,0]).item(), -(x_bar@P3d[:,1]).item(), -(x_bar@P3d[:,2]).item()],
@@ -124,7 +125,8 @@ def P3dtoP4d(x_bar, P3d, h3d=None) :
     if h3d is not None : P4d[0,0] += h3d
     return P4d
 
-def cholesky_unique(A): # 半正定矩阵的cholesky分解之一（可能因为舍入误差出现nan）
+# 半正定矩阵的cholesky分解之一（可能因为舍入误差出现nan）
+def cholesky_unique(A):
         A_temp = np.copy(A)
         L = np.zeros_like(A_temp)
         L[0,0] = np.sqrt(A_temp[0,0])
@@ -141,6 +143,7 @@ def cholesky_unique(A): # 半正定矩阵的cholesky分解之一（可能因为�
         #     L[1:,1:] = cholesky_unique(A_temp[1:, 1:])
         return L
 
+# 用于判断一个矩阵列表是否收敛，默认评价标准是矩阵的0范数之差，也可自行指定评价标准函数criterion
 def isConverge(matrices:list, criterion=None, tol:float = 1e-4, **kwargs):
     if criterion is None:
         candidates = matrices[:]
@@ -154,6 +157,7 @@ def isConverge(matrices:list, criterion=None, tol:float = 1e-4, **kwargs):
             return False
     return True
 
+# 随机数生成器，在指定随机数种子之后，可以确保反复生成相同的随机数
 class RandomGenerator : 
     def __init__(self, randomFun:np.random, rand_num=111) -> None:
         self.fun = randomFun
@@ -237,10 +241,11 @@ def EVD(M:np.ndarray, rank=None):
         L = np.pad(L, ((0,rank-L.shape[0]),(0,0)))
     return L
 
+# 用于计算MSE以及RMSE指标
 def calMSE(x_batch, xhat_batch):
     x_batch = np.array(x_batch)
     xhat_batch = np.array(xhat_batch)
-    SE = np.square(x_batch[:, :, :4] - xhat_batch[:, :, :4])
+    SE = np.square(x_batch[:, :, :] - xhat_batch[:, :, :])
     MSE = np.mean(np.mean(SE, axis=0), axis=0)
     RMSE = np.sqrt(np.mean(MSE))
     return MSE, RMSE

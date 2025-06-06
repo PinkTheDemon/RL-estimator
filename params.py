@@ -1,5 +1,6 @@
 import argparse
 import numpy as np
+
 from functions import block_diag
 
 # 解析输入参数
@@ -34,6 +35,18 @@ def getModelParams(modelName):
                    [0,1,0],
                    [0,0,1]], # 只能在modelParam中的P0用list格式，别的只能用ndarray
             "Q": np.diag((1e-2, 1e-2, 1e-2)),
+            "R": np.diag((1e-2, 1e-2)),
+            "disturbMu": None,
+            "noiseMu": None,
+        }
+    elif modelName == "Uncertain1":
+        modelParams = {
+            "x0_mu": np.array([10, 10, 10, 0]),
+            "P0": [[1,0,0,0],
+                   [0,1,0,0],
+                   [0,0,1,0],
+                   [0,0,0,0]], # 只能在modelParam中的P0用list格式，别的只能用ndarray
+            "Q": np.diag((1e-2, 1e-2, 1e-2, 0)),
             "R": np.diag((1e-2, 1e-2)),
             "disturbMu": None,
             "noiseMu": None,
@@ -74,6 +87,13 @@ def getEstParams(modelName, **kwargs):
             "Q": np.diag((1e-2, 1e-2, 1e-2)),
             "R": np.diag((1e-2, 1e-2)),
         }
+    elif modelName == "Uncertain1":
+        estParams = {
+            "x0_hat": np.array([1, 1, 1, 1]),
+            "P0_hat": np.diag((10., 10., 10., 100.)),
+            "Q": np.diag((1e-2, 1e-2, 1e-2, 1e2)),
+            "R": np.diag((1e-2, 1e-2)),
+        }
     elif modelName == "Continuous2":
         estParams = {
             "x0_hat": np.array([0, 0, 0, 0, 0, 0, 0, 0, 0]), #
@@ -97,7 +117,7 @@ def getTrainParams(estorName, **kwargs):
             "steps": 100,
             "episodes": 300,
             "randSeed": 0,
-            "lr": 5e-3,
+            "lr": 1e-2,
             "lr_min": 1e-5,
             "train_window": 4,
             "aver_num": 50,

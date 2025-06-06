@@ -89,7 +89,7 @@ if __name__ == "__main__" :
     isPrint = True
     isPlot = False
     # 选择执行测试的方法
-    test_options = ["EKF"] # , "UKF", "PF", "FIE", "EKF-MHE"
+    test_options = ["EKF-MHE"] # "UKF", "EKF", , "PF", "FIE"
     # 生成数据以及参数
     x_batch, y_batch = getData(modelName=model.name, steps=steps, episodes=episodes, randSeed=randSeed)
     modelParams = getModelParams(modelName=model.name)

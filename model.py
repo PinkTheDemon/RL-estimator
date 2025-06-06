@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.linalg import expm
+
 from functions import block_diag
 
 class Model:
@@ -73,7 +74,7 @@ class Discrete1(Model):
 
 # 洛伦兹吸引子
 class Continuous1(Model):
-    def __init__(self, sampleTime=0.01) -> None:
+    def __init__(self, sampleTime=0.1) -> None:
         super().__init__("Continuous1", 3, 2)
         self.modelErr = False
         self.sampleTime = sampleTime
@@ -90,8 +91,8 @@ class Continuous1(Model):
     def F(self, x, **args) : 
         return np.eye(x.size) + self.sampleTime * \
                                 np.array([[-10    , 10  , 0    ], 
-                                        [28-x[2], -1  , -x[0]],
-                                        [x[1]   , x[0], -8/3 ]])
+                                        [28, -1  , -x[0]],
+                                        [x[1]   , 0, -8/3 ]])
 
     def h(self, x, **args) : 
         return np.array([np.sqrt(x[0]**2+x[1]**2+x[2]**2), x[0]])
@@ -99,6 +100,50 @@ class Continuous1(Model):
     def H(self, x, **args) : 
         y = np.linalg.norm(x)
         return np.array([[x[0]/y, x[1]/y, x[2]/y], [1,0,0]])
+
+# 洛伦兹吸引子（不确定项）
+class Uncertain1(Model):
+    def __init__(self, sampleTime=0.01) -> None:
+        super().__init__("Uncertain1", 4, 2)
+        self.modelErr = True
+        self.sampleTime = sampleTime
+
+    def f(self, x, dt=None, **args) : 
+        xdot = lambda t, y : ( np.array([
+            10*(-y[0]+y[1]),
+            28*y[0] - y[1] + y[3],
+            -8/3*y[2] + y[0]*y[1],
+            0
+            ]) )
+        x = solve_ivp(xdot, [0,0+self.sampleTime], x).y.T[-1]
+        return x
+
+    def F(self, x, **args) : 
+        return np.eye(x.size) + self.sampleTime * \
+                                np.array([[-10, 10, 0, 0], 
+                                        [28, -1, 0, 1],
+                                        [x[1], 0, -8/3, 0],
+                                        [0, 0, 0, 0]])
+    
+    def f_real(self, x, dt=None, **args) : 
+        xdot = lambda t, y : ( np.array([
+            10*(-y[0]+y[1]),
+            28*y[0] - y[1] - y[0]*y[2],
+            -8/3*y[2] + y[0]*y[1]
+            ]) )
+        x[:3] = solve_ivp(xdot, [0,0+self.sampleTime], x[:3]).y.T[-1]
+        x[3] = -x[0]*x[2]
+        return x
+
+    def F_real(self, x, **args) : 
+        return None
+
+    def h(self, x, **args) : 
+        return np.array([np.sqrt(x[0]**2+x[1]**2+x[2]**2), x[0]])
+
+    def H(self, x, **args) : 
+        y = np.linalg.norm(x)
+        return np.array([[x[0]/y, x[1]/y, x[2]/y, 0], [1,0,0, 0]])
 
 # 四元数姿态估计
 class Continuous2(Model):
@@ -599,56 +644,9 @@ class Continuous4(Model):
 
 
 
-
-
-
-
-# xy平面无人船
-class Continuous3(Model):
-    def __init__(self, sampleTime=0.1) -> None:
-        super().__init__("Continuous3", 6, 8)
-        self.modelErr = False
-        self.sampleTime = sampleTime
-
-    def f(self, x, **args) : 
-        T = self.rotz(x[2])
-        
-        xdot = lambda t, y : ( np.array([
-            10*(-y[0]+y[1]),
-            28*y[0] - y[1] - y[0]*y[2],
-            -8/3*y[2] + y[0]*y[1]
-            ]) )
-        x = solve_ivp(xdot, [0,0+self.sampleTime], x).y.T[-1]
-        return x
-
-    def F(self, x, **args) : 
-        return np.eye(x.size) + self.sampleTime * \
-                                np.array([[-10    , 10  , 0    ], 
-                                        [28-x[2], -1  , -x[0]],
-                                        [x[1]   , x[0], -8/3 ]])
-
-    def h(self, x, **args) : 
-        return np.array([np.sqrt(x[0]**2+x[1]**2+x[2]**2), x[0]])
-
-    def H(self, x, **args) : 
-        y = np.linalg.norm(x)
-        return np.array([[x[0]/y, x[1]/y, x[2]/y], [1,0,0]])
-    
-    def rotz(self, angle) :
-        '''
-        机体系到惯性系
-        angle: rad
-        '''
-        sa = np.sin(angle)
-        ca = np.cos(angle)
-        C_x = np.array([
-            [ca, -sa, 0],
-            [sa,  ca, 0],
-            [0,    0, 1]
-        ])
-        return C_x
-
 # 对外接口
 def getModel(modelName) :
     if modelName == "Discrete1": return Discrete1()
-    if modelName == "Continuous1": return Continuous1()
+    elif modelName == "Continuous1": return Continuous1()
+    elif modelName == "Uncertain1": return Uncertain1()
+    else : raise ValueError("model name error!")

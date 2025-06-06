@@ -6,6 +6,7 @@ from functions import LogFile
 from model import getModel
 from params import getModelParams
 
+# 生成单条数据轨迹
 def generate_data(model, modelParam, steps, randSeed):
     np.random.seed(randSeed)
     # 生成初始状态
@@ -34,7 +35,7 @@ def generate_data(model, modelParam, steps, randSeed):
     for t in t_seq : # 真实轨迹
         x_next, y_next = model.step(x, disturb=disturb_list[t], noise=noise_list[t], isReal=True)
         x = x_next
-        x_seq.append(x_next)
+        x_seq.append(x_next.copy())
         y_seq.append(y_next)
     # 额外的外部扰动（未知且不希望有的）
     if hasattr(model, "ext_y") :
@@ -81,10 +82,6 @@ def generate_trajectories(modelName, steps, episodes, randSeed, isSave=True):
 
 # 根据相关信息获取数据，对外接口
 def getData(modelName, steps, episodes, randSeed):
-    isReverse = False
-    if "Reverse" in modelName:
-        isReverse = True
-        modelName = "Dynamics" + modelName[7:]
     fileName = f"data/{modelName}_steps{steps}_episodes{episodes}_randomSeed{randSeed}.bin"
     if os.path.isfile(fileName) :
         with open(file=fileName, mode="rb") as f:
@@ -93,10 +90,7 @@ def getData(modelName, steps, episodes, randSeed):
         trajs = generate_trajectories(modelName=modelName, steps=steps, episodes=episodes, randSeed=randSeed, isSave=False)
     x_batch = trajs["x_batch"]
     y_batch = trajs["y_batch"]
-    if isReverse :
-        x_batch = [x_seq[::-1] for x_seq in x_batch]
-        y_batch = [y_seq[::-1] for y_seq in y_batch]
     return x_batch, y_batch
 
 if __name__ == "__main__":
-    generate_trajectories(modelName="Continuous1", steps=100, episodes=50, randSeed=10086)
+    generate_trajectories(modelName="Continuous1", steps=100, episodes=300, randSeed=0)
